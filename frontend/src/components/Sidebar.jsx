@@ -20,15 +20,13 @@ export function Sidebar({ isConnected, browserRunning }) {
   const location = useLocation();
 
   return (
-    <aside className="fixed left-0 top-0 z-40 h-screen w-64 bg-dark-900/80 backdrop-blur-xl border-r border-dark-700/50">
+    <aside className="fixed left-0 top-0 z-40 h-screen w-64 bg-maroon-500 shadow-xl">
       {/* Logo */}
-      <div className="flex h-16 items-center gap-3 px-6 border-b border-dark-700/50">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-cyan-500 shadow-glow">
-          <CommandLineIcon className="h-5 w-5 text-white" />
-        </div>
+      <div className="flex h-20 items-center gap-3 px-6 border-b border-maroon-400/30">
+        <img src="/logo.jpg" alt="Logo" className="h-12 w-12 rounded-lg object-cover" />
         <div>
-          <h1 className="text-lg font-semibold text-dark-100">Browser Agent</h1>
-          <p className="text-xs text-dark-500">AI Automation</p>
+          <h1 className="text-lg font-semibold text-white">Browser Agent</h1>
+          <p className="text-xs text-maroon-200">AI Automation</p>
         </div>
       </div>
 
@@ -43,8 +41,8 @@ export function Sidebar({ isConnected, browserRunning }) {
               className={clsx(
                 'flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200',
                 isActive 
-                  ? 'bg-primary-600/20 text-primary-400 border border-primary-500/30' 
-                  : 'text-dark-400 hover:text-dark-100 hover:bg-dark-800'
+                  ? 'bg-white text-maroon-600 shadow-md' 
+                  : 'text-maroon-100 hover:text-white hover:bg-maroon-400/50'
               )}
             >
               <item.icon className="h-5 w-5" />
@@ -55,21 +53,21 @@ export function Sidebar({ isConnected, browserRunning }) {
       </nav>
 
       {/* Status indicators */}
-      <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-dark-700/50">
+      <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-maroon-400/30">
         <div className="space-y-3">
           {/* WebSocket Status */}
           <div className="flex items-center justify-between px-2">
-            <span className="text-xs text-dark-500">WebSocket</span>
+            <span className="text-xs text-maroon-200">WebSocket</span>
             <div className="flex items-center gap-2">
               {isConnected ? (
                 <>
-                  <SignalIcon className="h-4 w-4 text-emerald-400" />
-                  <span className="text-xs text-emerald-400">Connected</span>
+                  <SignalIcon className="h-4 w-4 text-emerald-300" />
+                  <span className="text-xs text-emerald-300">Connected</span>
                 </>
               ) : (
                 <>
-                  <SignalSlashIcon className="h-4 w-4 text-red-400" />
-                  <span className="text-xs text-red-400">Disconnected</span>
+                  <SignalSlashIcon className="h-4 w-4 text-red-300" />
+                  <span className="text-xs text-red-300">Disconnected</span>
                 </>
               )}
             </div>
@@ -77,15 +75,15 @@ export function Sidebar({ isConnected, browserRunning }) {
 
           {/* Browser Status */}
           <div className="flex items-center justify-between px-2">
-            <span className="text-xs text-dark-500">Browser</span>
+            <span className="text-xs text-maroon-200">Browser</span>
             <div className="flex items-center gap-2">
               <span className={clsx(
                 'h-2 w-2 rounded-full',
-                browserRunning ? 'bg-emerald-400 animate-pulse' : 'bg-dark-600'
+                browserRunning ? 'bg-emerald-300 animate-pulse' : 'bg-maroon-300'
               )} />
               <span className={clsx(
                 'text-xs',
-                browserRunning ? 'text-emerald-400' : 'text-dark-500'
+                browserRunning ? 'text-emerald-300' : 'text-maroon-200'
               )}>
                 {browserRunning ? 'Running' : 'Stopped'}
               </span>

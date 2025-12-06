@@ -17,9 +17,9 @@ import api from '../services/api';
 
 function FlowCard({ flow, onSelect, onRerun, onDelete, isSelected }) {
   const statusConfig = {
-    completed: { icon: CheckCircleIcon, color: 'text-emerald-400', bg: 'bg-emerald-500/20' },
-    failed: { icon: XCircleIcon, color: 'text-red-400', bg: 'bg-red-500/20' },
-    running: { icon: ArrowPathIcon, color: 'text-primary-400', bg: 'bg-primary-500/20' },
+    completed: { icon: CheckCircleIcon, color: 'text-emerald-600', bg: 'bg-emerald-100' },
+    failed: { icon: XCircleIcon, color: 'text-red-600', bg: 'bg-red-100' },
+    running: { icon: ArrowPathIcon, color: 'text-maroon-600', bg: 'bg-maroon-100' },
   };
 
   const config = statusConfig[flow.status] || statusConfig.completed;
@@ -30,7 +30,7 @@ function FlowCard({ flow, onSelect, onRerun, onDelete, isSelected }) {
       onClick={() => onSelect(flow)}
       className={clsx(
         'card-hover p-4 cursor-pointer group',
-        isSelected && 'border-primary-500 bg-primary-500/5'
+        isSelected && 'border-maroon-500 bg-maroon-50'
       )}
     >
       <div className="flex items-start gap-4">
@@ -41,11 +41,11 @@ function FlowCard({ flow, onSelect, onRerun, onDelete, isSelected }) {
 
         {/* Content */}
         <div className="flex-1 min-w-0">
-          <p className="text-dark-100 font-medium line-clamp-2 group-hover:text-primary-400 transition-colors">
+          <p className="text-gray-800 font-medium line-clamp-2 group-hover:text-maroon-700 transition-colors">
             {flow.instruction}
           </p>
           
-          <div className="flex items-center gap-4 mt-2 text-sm text-dark-500">
+          <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
             {flow.initial_url && (
               <span className="truncate max-w-[200px]">{flow.initial_url}</span>
             )}
@@ -53,7 +53,7 @@ function FlowCard({ flow, onSelect, onRerun, onDelete, isSelected }) {
           </div>
 
           <div className="flex items-center justify-between mt-3">
-            <span className="text-xs text-dark-600">
+            <span className="text-xs text-gray-400">
               {formatDistanceToNow(new Date(flow.created_at), { addSuffix: true })}
             </span>
 
@@ -61,14 +61,14 @@ function FlowCard({ flow, onSelect, onRerun, onDelete, isSelected }) {
             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
                 onClick={(e) => { e.stopPropagation(); onRerun(flow); }}
-                className="p-1.5 rounded-md hover:bg-dark-700 text-dark-400 hover:text-primary-400 transition-colors"
+                className="p-1.5 rounded-md hover:bg-gray-100 text-gray-400 hover:text-maroon-600 transition-colors"
                 title="Re-run"
               >
                 <PlayIcon className="h-4 w-4" />
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); onDelete(flow.id); }}
-                className="p-1.5 rounded-md hover:bg-dark-700 text-dark-400 hover:text-red-400 transition-colors"
+                className="p-1.5 rounded-md hover:bg-gray-100 text-gray-400 hover:text-red-600 transition-colors"
                 title="Delete"
               >
                 <TrashIcon className="h-4 w-4" />
@@ -77,7 +77,7 @@ function FlowCard({ flow, onSelect, onRerun, onDelete, isSelected }) {
           </div>
         </div>
 
-        <ChevronRightIcon className="h-5 w-5 text-dark-600 group-hover:text-dark-400 transition-colors flex-shrink-0" />
+        <ChevronRightIcon className="h-5 w-5 text-gray-400 group-hover:text-gray-600 transition-colors flex-shrink-0" />
       </div>
     </div>
   );
@@ -95,12 +95,12 @@ function FlowDetail({ flow, onEdit, onRerun, onClose }) {
   return (
     <div className="card h-full overflow-hidden flex flex-col">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-dark-700/50 bg-dark-800/30 flex-shrink-0">
+      <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 flex-shrink-0">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-dark-100">Flow Details</h3>
+          <h3 className="text-lg font-semibold text-gray-900">Flow Details</h3>
           <button
             onClick={onClose}
-            className="p-1 rounded-md hover:bg-dark-700 text-dark-400"
+            className="p-1 rounded-md hover:bg-gray-200 text-gray-400"
           >
             <XCircleIcon className="h-5 w-5" />
           </button>
@@ -108,7 +108,7 @@ function FlowDetail({ flow, onEdit, onRerun, onClose }) {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-white">
         {/* Instruction */}
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -143,7 +143,7 @@ function FlowDetail({ flow, onEdit, onRerun, onClose }) {
               </div>
             </div>
           ) : (
-            <p className="text-dark-200 bg-dark-800/50 p-4 rounded-lg">
+            <p className="text-gray-700 bg-gray-50 p-4 rounded-lg border border-gray-200">
               {flow.instruction}
             </p>
           )}
@@ -151,28 +151,28 @@ function FlowDetail({ flow, onEdit, onRerun, onClose }) {
 
         {/* Metadata */}
         <div className="grid grid-cols-2 gap-4">
-          <div className="p-4 bg-dark-800/30 rounded-lg">
-            <span className="text-xs text-dark-500 block mb-1">Status</span>
+          <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <span className="text-xs text-gray-500 block mb-1">Status</span>
             <span className={clsx(
               'font-medium capitalize',
-              flow.status === 'completed' ? 'text-emerald-400' : 'text-red-400'
+              flow.status === 'completed' ? 'text-emerald-600' : 'text-red-600'
             )}>
               {flow.status}
             </span>
           </div>
-          <div className="p-4 bg-dark-800/30 rounded-lg">
-            <span className="text-xs text-dark-500 block mb-1">Actions</span>
-            <span className="font-medium text-dark-200">{flow.action_count}</span>
+          <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <span className="text-xs text-gray-500 block mb-1">Actions</span>
+            <span className="font-medium text-gray-700">{flow.action_count}</span>
           </div>
-          <div className="p-4 bg-dark-800/30 rounded-lg">
-            <span className="text-xs text-dark-500 block mb-1">Created</span>
-            <span className="font-medium text-dark-200 text-sm">
+          <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <span className="text-xs text-gray-500 block mb-1">Created</span>
+            <span className="font-medium text-gray-700 text-sm">
               {format(new Date(flow.created_at), 'MMM d, yyyy HH:mm')}
             </span>
           </div>
-          <div className="p-4 bg-dark-800/30 rounded-lg">
-            <span className="text-xs text-dark-500 block mb-1">Provider</span>
-            <span className="font-medium text-dark-200 capitalize">{flow.provider || 'openai'}</span>
+          <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <span className="text-xs text-gray-500 block mb-1">Provider</span>
+            <span className="font-medium text-gray-700 capitalize">{flow.provider || 'openai'}</span>
           </div>
         </div>
 
@@ -180,7 +180,7 @@ function FlowDetail({ flow, onEdit, onRerun, onClose }) {
         {flow.initial_url && (
           <div>
             <label className="label">Starting URL</label>
-            <p className="text-primary-400 bg-dark-800/50 p-4 rounded-lg text-sm break-all">
+            <p className="text-maroon-700 bg-maroon-50 p-4 rounded-lg text-sm break-all border border-maroon-200">
               {flow.initial_url}
             </p>
           </div>
@@ -190,8 +190,8 @@ function FlowDetail({ flow, onEdit, onRerun, onClose }) {
         {flow.result && (
           <div>
             <label className="label">Result</label>
-            <div className="bg-dark-800/50 p-4 rounded-lg">
-              <p className="text-dark-200 whitespace-pre-wrap">{flow.result}</p>
+            <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+              <p className="text-gray-700 whitespace-pre-wrap">{flow.result}</p>
             </div>
           </div>
         )}
@@ -199,16 +199,16 @@ function FlowDetail({ flow, onEdit, onRerun, onClose }) {
         {/* Error */}
         {flow.error && (
           <div>
-            <label className="label text-red-400">Error</label>
-            <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-lg">
-              <p className="text-red-400 font-mono text-sm">{flow.error}</p>
+            <label className="label text-red-600">Error</label>
+            <div className="bg-red-50 border border-red-200 p-4 rounded-lg">
+              <p className="text-red-700 font-mono text-sm">{flow.error}</p>
             </div>
           </div>
         )}
       </div>
 
       {/* Footer */}
-      <div className="px-6 py-4 border-t border-dark-700/50 flex-shrink-0">
+      <div className="px-6 py-4 border-t border-gray-200 flex-shrink-0 bg-gray-50">
         <button
           onClick={() => onRerun(flow)}
           className="btn-primary w-full"
@@ -301,7 +301,7 @@ export function FlowHistory({ onRerun }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <ArrowPathIcon className="h-8 w-8 text-dark-500 animate-spin" />
+        <ArrowPathIcon className="h-8 w-8 text-gray-400 animate-spin" />
       </div>
     );
   }
@@ -314,12 +314,12 @@ export function FlowHistory({ onRerun }) {
         <div className="mb-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-amber-500/20">
-                <ClockIcon className="h-5 w-5 text-amber-400" />
+              <div className="p-2 rounded-lg bg-gold-100">
+                <ClockIcon className="h-5 w-5 text-gold-600" />
               </div>
               <div>
-                <h2 className="text-xl font-semibold text-dark-100">Flow History</h2>
-                <p className="text-sm text-dark-500">{flows.length} recorded automations</p>
+                <h2 className="text-xl font-semibold text-gray-900">Flow History</h2>
+                <p className="text-sm text-gray-500">{flows.length} recorded automations</p>
               </div>
             </div>
             
@@ -334,7 +334,7 @@ export function FlowHistory({ onRerun }) {
           {/* Search & Filter */}
           <div className="flex gap-3">
             <div className="flex-1 relative">
-              <MagnifyingGlassIcon className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-dark-500" />
+              <MagnifyingGlassIcon className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
               <input
                 type="text"
                 value={searchQuery}
@@ -359,13 +359,13 @@ export function FlowHistory({ onRerun }) {
         <div className="flex-1 overflow-y-auto space-y-3">
           {filteredFlows.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-center">
-              <div className="p-4 rounded-full bg-dark-800 mb-4">
-                <ClockIcon className="h-8 w-8 text-dark-500" />
+              <div className="p-4 rounded-full bg-gray-100 mb-4">
+                <ClockIcon className="h-8 w-8 text-gray-400" />
               </div>
-              <h3 className="text-dark-300 font-medium mb-2">
+              <h3 className="text-gray-700 font-medium mb-2">
                 {searchQuery || statusFilter !== 'all' ? 'No matching flows' : 'No flow history yet'}
               </h3>
-              <p className="text-dark-500 text-sm max-w-xs">
+              <p className="text-gray-500 text-sm max-w-xs">
                 {searchQuery || statusFilter !== 'all' 
                   ? 'Try adjusting your search or filters'
                   : 'Run your first automation to see it appear here'

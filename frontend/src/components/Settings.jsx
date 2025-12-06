@@ -90,28 +90,28 @@ export function Settings() {
     <div className="max-w-3xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center gap-3 mb-8">
-        <div className="p-3 rounded-xl bg-gradient-to-br from-primary-500 to-cyan-500">
+        <div className="p-3 rounded-xl bg-gradient-to-br from-maroon-600 to-maroon-800">
           <Cog6ToothIcon className="h-6 w-6 text-white" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-dark-100">Settings</h1>
-          <p className="text-dark-500">Configure your browser agent preferences</p>
+          <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
+          <p className="text-gray-500">Configure your browser agent preferences</p>
         </div>
       </div>
 
       {/* Browser Control */}
       <div className="card">
-        <div className="px-6 py-4 border-b border-dark-700/50">
+        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
           <div className="flex items-center gap-3">
-            <ServerIcon className="h-5 w-5 text-primary-400" />
-            <h2 className="text-lg font-semibold text-dark-100">Browser Control</h2>
+            <ServerIcon className="h-5 w-5 text-maroon-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Browser Control</h2>
           </div>
         </div>
-        <div className="p-6">
+        <div className="p-6 bg-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-dark-200 font-medium">Browser Status</p>
-              <p className="text-sm text-dark-500">
+              <p className="text-gray-700 font-medium">Browser Status</p>
+              <p className="text-sm text-gray-500">
                 {browserStatus?.browser_running 
                   ? 'The browser is currently running'
                   : 'The browser is not running'
@@ -122,8 +122,8 @@ export function Settings() {
               <span className={clsx(
                 'px-3 py-1 rounded-full text-sm font-medium',
                 browserStatus?.browser_running 
-                  ? 'bg-emerald-500/20 text-emerald-400'
-                  : 'bg-dark-700 text-dark-400'
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-gray-100 text-gray-500'
               )}>
                 {browserStatus?.browser_running ? 'Running' : 'Stopped'}
               </span>
@@ -143,13 +143,13 @@ export function Settings() {
 
       {/* AI Provider */}
       <div className="card">
-        <div className="px-6 py-4 border-b border-dark-700/50">
+        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
           <div className="flex items-center gap-3">
-            <KeyIcon className="h-5 w-5 text-amber-400" />
-            <h2 className="text-lg font-semibold text-dark-100">AI Provider</h2>
+            <KeyIcon className="h-5 w-5 text-gold-600" />
+            <h2 className="text-lg font-semibold text-gray-900">AI Provider</h2>
           </div>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4 bg-white">
           <div>
             <label className="label">Default Provider</label>
             <select
@@ -160,7 +160,7 @@ export function Settings() {
               <option value="openai">OpenAI (GPT-4 Turbo)</option>
               <option value="anthropic">Anthropic (Claude 3.5 Sonnet)</option>
             </select>
-            <p className="text-xs text-dark-500 mt-2">
+            <p className="text-xs text-gray-500 mt-2">
               Make sure you have the corresponding API key set in your environment variables
             </p>
           </div>
@@ -169,13 +169,13 @@ export function Settings() {
 
       {/* Connection Settings */}
       <div className="card">
-        <div className="px-6 py-4 border-b border-dark-700/50">
+        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
           <div className="flex items-center gap-3">
-            <ServerIcon className="h-5 w-5 text-cyan-400" />
-            <h2 className="text-lg font-semibold text-dark-100">Connection</h2>
+            <ServerIcon className="h-5 w-5 text-blue-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Connection</h2>
           </div>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4 bg-white">
           <div>
             <label className="label">API Endpoint</label>
             <input
@@ -201,23 +201,23 @@ export function Settings() {
 
       {/* UI Preferences */}
       <div className="card">
-        <div className="px-6 py-4 border-b border-dark-700/50">
+        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
           <div className="flex items-center gap-3">
-            <PaintBrushIcon className="h-5 w-5 text-purple-400" />
-            <h2 className="text-lg font-semibold text-dark-100">Preferences</h2>
+            <PaintBrushIcon className="h-5 w-5 text-maroon-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Preferences</h2>
           </div>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4 bg-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-dark-200 font-medium">Auto-scroll Timeline</p>
-              <p className="text-sm text-dark-500">Automatically scroll to new actions</p>
+              <p className="text-gray-700 font-medium">Auto-scroll Timeline</p>
+              <p className="text-sm text-gray-500">Automatically scroll to new actions</p>
             </div>
             <button
               onClick={() => setSettings({ ...settings, autoScroll: !settings.autoScroll })}
               className={clsx(
                 'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
-                settings.autoScroll ? 'bg-primary-600' : 'bg-dark-600'
+                settings.autoScroll ? 'bg-maroon-600' : 'bg-gray-300'
               )}
             >
               <span
@@ -231,14 +231,14 @@ export function Settings() {
 
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-dark-200 font-medium">Sound Notifications</p>
-              <p className="text-sm text-dark-500">Play sound when task completes</p>
+              <p className="text-gray-700 font-medium">Sound Notifications</p>
+              <p className="text-sm text-gray-500">Play sound when task completes</p>
             </div>
             <button
               onClick={() => setSettings({ ...settings, soundNotifications: !settings.soundNotifications })}
               className={clsx(
                 'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
-                settings.soundNotifications ? 'bg-primary-600' : 'bg-dark-600'
+                settings.soundNotifications ? 'bg-maroon-600' : 'bg-gray-300'
               )}
             >
               <span
@@ -254,17 +254,17 @@ export function Settings() {
 
       {/* Data Management */}
       <div className="card">
-        <div className="px-6 py-4 border-b border-dark-700/50">
+        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
           <div className="flex items-center gap-3">
-            <TrashIcon className="h-5 w-5 text-red-400" />
-            <h2 className="text-lg font-semibold text-dark-100">Data Management</h2>
+            <TrashIcon className="h-5 w-5 text-red-500" />
+            <h2 className="text-lg font-semibold text-gray-900">Data Management</h2>
           </div>
         </div>
-        <div className="p-6">
+        <div className="p-6 bg-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-dark-200 font-medium">Clear Flow History</p>
-              <p className="text-sm text-dark-500">Delete all recorded automation flows</p>
+              <p className="text-gray-700 font-medium">Clear Flow History</p>
+              <p className="text-sm text-gray-500">Delete all recorded automation flows</p>
             </div>
             <button onClick={handleClearHistory} className="btn-danger py-2 px-4">
               Clear History

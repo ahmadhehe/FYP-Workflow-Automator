@@ -46,7 +46,7 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-dark-950">
+    <div className="min-h-screen bg-gray-50">
       {/* Sidebar */}
       <Sidebar 
         isConnected={isConnected} 
@@ -87,8 +87,8 @@ function App() {
 
       {/* Background Gradient Effects */}
       <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-primary-500/10 rounded-full blur-3xl" />
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-cyan-500/10 rounded-full blur-3xl" />
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-maroon-500/5 rounded-full blur-3xl" />
+        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-gold-500/5 rounded-full blur-3xl" />
       </div>
     </div>
   );

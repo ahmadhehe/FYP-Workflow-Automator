@@ -48,21 +48,21 @@ const getActionIcon = (type, tool) => {
 
 const getActionColor = (type, success) => {
   if (type === 'tool_result') {
-    return success ? 'text-emerald-400 bg-emerald-500/20' : 'text-red-400 bg-red-500/20';
+    return success ? 'text-emerald-600 bg-emerald-100' : 'text-red-600 bg-red-100';
   }
   
   switch (type) {
     case 'start':
     case 'navigate':
-      return 'text-primary-400 bg-primary-500/20';
+      return 'text-maroon-600 bg-maroon-100';
     case 'thinking':
-      return 'text-amber-400 bg-amber-500/20';
+      return 'text-gold-600 bg-gold-100';
     case 'complete':
-      return 'text-emerald-400 bg-emerald-500/20';
+      return 'text-emerald-600 bg-emerald-100';
     case 'tool_call':
-      return 'text-cyan-400 bg-cyan-500/20';
+      return 'text-blue-600 bg-blue-100';
     default:
-      return 'text-dark-400 bg-dark-600';
+      return 'text-gray-500 bg-gray-100';
   }
 };
 
@@ -73,7 +73,7 @@ function ActionItem({ action, isLatest }) {
   return (
     <div className={clsx(
       'flex gap-4 p-4 rounded-lg transition-all duration-300',
-      isLatest ? 'bg-dark-800/80 border border-dark-600' : 'hover:bg-dark-800/40'
+      isLatest ? 'bg-maroon-50 border border-maroon-200' : 'hover:bg-gray-50'
     )}>
       {/* Icon */}
       <div className={clsx(
@@ -86,7 +86,7 @@ function ActionItem({ action, isLatest }) {
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-dark-100">
+          <span className="font-medium text-gray-900">
             {action.tool || action.type}
           </span>
           {action.iteration > 0 && (
@@ -96,20 +96,20 @@ function ActionItem({ action, isLatest }) {
           )}
           {action.type === 'tool_result' && (
             action.success ? (
-              <CheckCircleIcon className="h-4 w-4 text-emerald-400" />
+              <CheckCircleIcon className="h-4 w-4 text-emerald-500" />
             ) : (
-              <XCircleIcon className="h-4 w-4 text-red-400" />
+              <XCircleIcon className="h-4 w-4 text-red-500" />
             )
           )}
         </div>
         
-        <p className="text-sm text-dark-400 mt-1 line-clamp-2">
+        <p className="text-sm text-gray-500 mt-1 line-clamp-2">
           {action.message}
         </p>
 
         {/* Arguments preview for tool calls */}
         {action.arguments && Object.keys(action.arguments).length > 0 && (
-          <div className="mt-2 p-2 bg-dark-900/50 rounded text-xs font-mono text-dark-500 overflow-x-auto">
+          <div className="mt-2 p-2 bg-gray-100 rounded text-xs font-mono text-gray-600 overflow-x-auto">
             {JSON.stringify(action.arguments, null, 2).substring(0, 200)}
             {JSON.stringify(action.arguments).length > 200 && '...'}
           </div>
@@ -117,7 +117,7 @@ function ActionItem({ action, isLatest }) {
 
         {/* URL for navigate actions */}
         {action.url && (
-          <div className="mt-2 text-xs text-primary-400 truncate">
+          <div className="mt-2 text-xs text-maroon-600 truncate">
             {action.url}
           </div>
         )}
@@ -125,7 +125,7 @@ function ActionItem({ action, isLatest }) {
 
       {/* Timestamp */}
       {action.timestamp && (
-        <div className="flex-shrink-0 text-xs text-dark-600">
+        <div className="flex-shrink-0 text-xs text-gray-400">
           {formatDistanceToNow(new Date(action.timestamp), { addSuffix: true })}
         </div>
       )}
@@ -156,24 +156,24 @@ export function ActionTimeline({ events, taskStatus }) {
   return (
     <div className="card flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-dark-700/50 bg-dark-800/30 flex-shrink-0">
+      <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-cyan-500/20">
-              <CommandLineIcon className="h-5 w-5 text-cyan-400" />
+            <div className="p-2 rounded-lg bg-maroon-100">
+              <CommandLineIcon className="h-5 w-5 text-maroon-600" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-dark-100">Action Timeline</h2>
-              <p className="text-sm text-dark-500">
+              <h2 className="text-lg font-semibold text-gray-900">Action Timeline</h2>
+              <p className="text-sm text-gray-500">
                 {events.length} action{events.length !== 1 ? 's' : ''} recorded
               </p>
             </div>
           </div>
           
           {taskStatus === 'running' && (
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-primary-500/20 rounded-full">
-              <span className="h-2 w-2 rounded-full bg-primary-400 animate-pulse" />
-              <span className="text-xs font-medium text-primary-400">Live</span>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-maroon-100 rounded-full">
+              <span className="h-2 w-2 rounded-full bg-maroon-500 animate-pulse" />
+              <span className="text-xs font-medium text-maroon-700">Live</span>
             </div>
           )}
         </div>
@@ -187,11 +187,11 @@ export function ActionTimeline({ events, taskStatus }) {
       >
         {isEmpty ? (
           <div className="flex flex-col items-center justify-center h-full text-center py-12">
-            <div className="p-4 rounded-full bg-dark-800 mb-4">
-              <CommandLineIcon className="h-8 w-8 text-dark-500" />
+            <div className="p-4 rounded-full bg-gray-100 mb-4">
+              <CommandLineIcon className="h-8 w-8 text-gray-400" />
             </div>
-            <h3 className="text-dark-300 font-medium mb-2">No actions yet</h3>
-            <p className="text-dark-500 text-sm max-w-xs">
+            <h3 className="text-gray-700 font-medium mb-2">No actions yet</h3>
+            <p className="text-gray-500 text-sm max-w-xs">
               Start a new automation task to see the agent's actions appear here in real-time
             </p>
           </div>

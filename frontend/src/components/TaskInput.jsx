@@ -32,14 +32,14 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
   return (
     <div className="card overflow-hidden">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-dark-700/50 bg-dark-800/30">
+      <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-maroon-500 to-maroon-600">
         <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-primary-500/20">
-            <SparklesIcon className="h-5 w-5 text-primary-400" />
+          <div className="p-2 rounded-lg bg-white/20">
+            <SparklesIcon className="h-5 w-5 text-white" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-dark-100">New Automation</h2>
-            <p className="text-sm text-dark-500">Describe what you want the agent to do</p>
+            <h2 className="text-lg font-semibold text-white">New Automation</h2>
+            <p className="text-sm text-maroon-100">Describe what you want the agent to do</p>
           </div>
         </div>
       </div>
@@ -61,7 +61,7 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
         <button
           type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-2 text-sm text-dark-400 hover:text-dark-300 transition-colors"
+          className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
         >
           <ChevronDownIcon className={clsx(
             'h-4 w-4 transition-transform duration-200',
@@ -77,7 +77,7 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
             <div>
               <label className="label">Starting URL (optional)</label>
               <div className="relative">
-                <GlobeAltIcon className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-dark-500" />
+                <GlobeAltIcon className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
                 <input
                   type="url"
                   value={initialUrl}
@@ -102,12 +102,12 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
                     className={clsx(
                       'p-4 rounded-lg border text-left transition-all duration-200',
                       provider === p.id
-                        ? 'border-primary-500 bg-primary-500/10 text-primary-400'
-                        : 'border-dark-700 hover:border-dark-600 text-dark-300 hover:bg-dark-800/50'
+                        ? 'border-maroon-500 bg-maroon-50 text-maroon-700'
+                        : 'border-gray-200 hover:border-gray-300 text-gray-600 hover:bg-gray-50'
                     )}
                   >
                     <div className="font-medium">{p.name}</div>
-                    <div className="text-xs text-dark-500 mt-1">{p.description}</div>
+                    <div className="text-xs text-gray-500 mt-1">{p.description}</div>
                   </button>
                 ))}
               </div>

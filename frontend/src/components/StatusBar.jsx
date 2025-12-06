@@ -6,17 +6,17 @@ export function StatusBar({ status, currentIteration, isConnected }) {
     switch (status) {
       case 'running':
         return {
-          color: 'bg-primary-500',
+          color: 'bg-maroon-500',
           text: 'Running',
           pulse: true,
-          textColor: 'text-primary-400',
+          textColor: 'text-maroon-600',
         };
       case 'completed':
         return {
           color: 'bg-emerald-500',
           text: 'Completed',
           pulse: false,
-          textColor: 'text-emerald-400',
+          textColor: 'text-emerald-600',
         };
       case 'failed':
       case 'error':
@@ -24,21 +24,21 @@ export function StatusBar({ status, currentIteration, isConnected }) {
           color: 'bg-red-500',
           text: 'Failed',
           pulse: false,
-          textColor: 'text-red-400',
+          textColor: 'text-red-600',
         };
       case 'initializing':
         return {
-          color: 'bg-amber-500',
+          color: 'bg-gold-500',
           text: 'Initializing',
           pulse: true,
-          textColor: 'text-amber-400',
+          textColor: 'text-gold-600',
         };
       default:
         return {
-          color: 'bg-dark-600',
+          color: 'bg-gray-400',
           text: 'Idle',
           pulse: false,
-          textColor: 'text-dark-400',
+          textColor: 'text-gray-500',
         };
     }
   };
@@ -70,13 +70,13 @@ export function StatusBar({ status, currentIteration, isConnected }) {
           </div>
 
           {/* Connection Status */}
-          <div className="h-4 w-px bg-dark-700" />
+          <div className="h-4 w-px bg-gray-300" />
           <div className="flex items-center gap-2">
             <span className={clsx(
               'h-2 w-2 rounded-full',
               isConnected ? 'bg-emerald-500' : 'bg-red-500'
             )} />
-            <span className="text-sm text-dark-400">
+            <span className="text-sm text-gray-500">
               {isConnected ? 'Live' : 'Offline'}
             </span>
           </div>
@@ -84,19 +84,19 @@ export function StatusBar({ status, currentIteration, isConnected }) {
 
         {/* Iteration Counter */}
         {currentIteration && (
-          <div className="flex items-center gap-3 px-4 py-2 bg-dark-800 rounded-lg">
-            <span className="text-sm text-dark-400">Iteration</span>
+          <div className="flex items-center gap-3 px-4 py-2 bg-gray-100 rounded-lg">
+            <span className="text-sm text-gray-500">Iteration</span>
             <div className="flex items-baseline gap-1">
-              <span className="text-xl font-semibold text-primary-400">
+              <span className="text-xl font-semibold text-maroon-600">
                 {currentIteration.current}
               </span>
-              <span className="text-dark-500">/</span>
-              <span className="text-dark-400">{currentIteration.max}</span>
+              <span className="text-gray-400">/</span>
+              <span className="text-gray-500">{currentIteration.max}</span>
             </div>
             {/* Progress bar */}
-            <div className="w-24 h-1.5 bg-dark-700 rounded-full overflow-hidden">
+            <div className="w-24 h-1.5 bg-gray-200 rounded-full overflow-hidden">
               <div 
-                className="h-full bg-gradient-to-r from-primary-500 to-cyan-500 transition-all duration-300"
+                className="h-full bg-gradient-to-r from-maroon-500 to-gold-500 transition-all duration-300"
                 style={{ 
                   width: `${(currentIteration.current / currentIteration.max) * 100}%` 
                 }}

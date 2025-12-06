@@ -61,8 +61,8 @@ export function Dashboard({
     <div className="space-y-6 h-full">
       {/* Page Header */}
       <div>
-        <h1 className="text-2xl font-bold text-dark-100">Dashboard</h1>
-        <p className="text-dark-500 mt-1">Create and monitor browser automation tasks</p>
+        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+        <p className="text-gray-500 mt-1">Create and monitor browser automation tasks</p>
       </div>
 
       {/* Status Bar */}
