@@ -40,17 +40,18 @@ class BrowserController:
     def navigate(self, url: str) -> Dict[str, Any]:
         """Navigate to URL with smart waiting"""
         try:
-            # Navigate and wait for network to be idle
-            self.page.goto(url, wait_until='networkidle', timeout=60000)
-            
-            # Additional wait for dynamic content
-            self.page.wait_for_load_state('domcontentloaded')
-            
-            # Give JavaScript time to render (but intelligently)
-            self.page.wait_for_timeout(1000)
+            # Navigate - use 'domcontentloaded' instead of 'networkidle' for faster/more reliable navigation
+            # 'networkidle' can timeout on sites like YouTube that constantly make requests
+            self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
             
             # Wait for body to be visible
-            self.page.wait_for_selector('body', state='visible', timeout=10000)
+            try:
+                self.page.wait_for_selector('body', state='visible', timeout=10000)
+            except:
+                pass  # Some pages may not have body immediately visible
+            
+            # Small delay for initial rendering
+            self.page.wait_for_timeout(500)
             
             return {
                 'success': True,
