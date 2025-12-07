@@ -26,6 +26,7 @@ class LLMClient:
 
 You have access to these tools:
 
+**Page Interaction:**
 1. **getInteractiveSnapshot()** - Get all interactive elements on the current page
    Returns: List of elements with nodeId, type (clickable/typeable/selectable), name, role, position
 
@@ -51,6 +52,17 @@ You have access to these tools:
 
 9. **sendKeys(key)** - Send special keys like "Enter", "Tab", "Escape"
 
+**Tab Management:**
+10. **openNewTab(url?)** - Open a new tab, optionally with a URL
+11. **switchToTab(tabIndex)** - Switch to a specific tab by index
+12. **closeTab(tabIndex?)** - Close a tab (current tab if no index specified)
+13. **listTabs()** - List all open tabs with URLs and titles
+14. **nextTab()** / **previousTab()** - Navigate between tabs
+15. **goBack()** / **goForward()** - Navigate browser history
+16. **reloadTab(tabIndex?)** - Refresh a tab
+17. **closeOtherTabs()** - Close all tabs except current
+18. **duplicateTab(tabIndex?)** - Duplicate a tab
+
 **Guidelines:**
 - Always call getInteractiveSnapshot() FIRST to see what's on the page
 - Use nodeId from the snapshot to interact with elements
@@ -59,6 +71,8 @@ You have access to these tools:
 - If something fails, try alternative approaches
 - Use getPageContent() to verify results
 - When searching or submitting forms, use sendKeys("Enter") after typing
+- Use tab management to work with multiple pages simultaneously
+- Call listTabs() to see all open tabs and their indices
 
 **Example workflow:**
 1. Call getInteractiveSnapshot() to see the page
@@ -66,6 +80,12 @@ You have access to these tools:
 3. Use click() or inputText() with the correct nodeId
 4. Verify the action succeeded
 5. Continue to next step
+
+**Multi-tab workflow:**
+1. openNewTab(url) to open additional pages
+2. listTabs() to see all open tabs
+3. switchToTab(index) to switch between tabs
+4. Perform actions on each tab as needed
 
 Think step by step and be precise with element selection."""
 
@@ -328,6 +348,136 @@ Think step by step and be precise with element selection."""
                     'name': 'getPageLoadStatus',
                     'description': 'Check if the page has finished loading',
                     'parameters': {'type': 'object', 'properties': {}}
+                }
+            },
+            # Tab Management Tools
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'openNewTab',
+                    'description': 'Open a new browser tab, optionally navigating to a URL',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'url': {
+                                'type': 'string',
+                                'description': 'Optional URL to navigate to in the new tab'
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'switchToTab',
+                    'description': 'Switch to a specific tab by its index (0-based)',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'tabIndex': {
+                                'type': 'integer',
+                                'description': 'Index of the tab to switch to (0 is the first tab)'
+                            }
+                        },
+                        'required': ['tabIndex']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'closeTab',
+                    'description': 'Close a specific tab or the current tab',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'tabIndex': {
+                                'type': 'integer',
+                                'description': 'Index of tab to close (omit to close current tab)'
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'listTabs',
+                    'description': 'List all open tabs with their URLs and titles',
+                    'parameters': {'type': 'object', 'properties': {}}
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'nextTab',
+                    'description': 'Switch to the next tab (wraps around to first tab)',
+                    'parameters': {'type': 'object', 'properties': {}}
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'previousTab',
+                    'description': 'Switch to the previous tab (wraps around to last tab)',
+                    'parameters': {'type': 'object', 'properties': {}}
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'goBack',
+                    'description': 'Navigate back in the current tab\'s history',
+                    'parameters': {'type': 'object', 'properties': {}}
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'goForward',
+                    'description': 'Navigate forward in the current tab\'s history',
+                    'parameters': {'type': 'object', 'properties': {}}
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'reloadTab',
+                    'description': 'Reload/refresh a tab',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'tabIndex': {
+                                'type': 'integer',
+                                'description': 'Index of tab to reload (omit to reload current tab)'
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'closeOtherTabs',
+                    'description': 'Close all tabs except the current one',
+                    'parameters': {'type': 'object', 'properties': {}}
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'duplicateTab',
+                    'description': 'Duplicate a tab by opening the same URL in a new tab',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'tabIndex': {
+                                'type': 'integer',
+                                'description': 'Index of tab to duplicate (omit to duplicate current tab)'
+                            }
+                        }
+                    }
                 }
             }
         ]

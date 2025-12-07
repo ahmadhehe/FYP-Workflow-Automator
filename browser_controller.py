@@ -13,6 +13,9 @@ class BrowserController:
         self.playwright: Optional[Playwright] = None
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
+        self.context = None
+        self.pages: List[Page] = []  # Track all open tabs
+        self.current_tab_index: int = 0  # Currently active tab
         self.snapshot_cache: Dict[str, Any] = {}
         
     def start(self):
@@ -22,11 +25,13 @@ class BrowserController:
             headless=self.headless,
             args=['--start-maximized']
         )
-        context = self.browser.new_context(
+        self.context = self.browser.new_context(
             viewport={'width': 1920, 'height': 1080},
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         )
-        self.page = context.new_page()
+        self.page = self.context.new_page()
+        self.pages = [self.page]
+        self.current_tab_index = 0
         print("✓ Browser started")
         
     def close(self):
@@ -35,6 +40,8 @@ class BrowserController:
             self.browser.close()
         if self.playwright:
             self.playwright.stop()
+        self.pages = []
+        self.current_tab_index = 0
         print("✓ Browser closed")
         
     def navigate(self, url: str) -> Dict[str, Any]:
@@ -443,3 +450,207 @@ class BrowserController:
             }
         except Exception as e:
             return {'error': str(e)}
+    
+    # ========== TAB MANAGEMENT METHODS ==========
+    
+    def open_new_tab(self, url: Optional[str] = None) -> Dict[str, Any]:
+        """Open a new tab and optionally navigate to URL"""
+        try:
+            new_page = self.context.new_page()
+            self.pages.append(new_page)
+            new_tab_index = len(self.pages) - 1
+            
+            result = {
+                'success': True,
+                'tabIndex': new_tab_index,
+                'totalTabs': len(self.pages)
+            }
+            
+            # Navigate if URL provided
+            if url:
+                new_page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                result['url'] = new_page.url
+                result['title'] = new_page.title()
+            
+            return result
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def switch_to_tab(self, tab_index: int) -> Dict[str, Any]:
+        """Switch to a specific tab by index"""
+        try:
+            if tab_index < 0 or tab_index >= len(self.pages):
+                return {
+                    'success': False, 
+                    'error': f'Invalid tab index {tab_index}. Valid range: 0-{len(self.pages) - 1}'
+                }
+            
+            self.current_tab_index = tab_index
+            self.page = self.pages[tab_index]
+            
+            # Bring tab to front
+            self.page.bring_to_front()
+            
+            return {
+                'success': True,
+                'tabIndex': tab_index,
+                'url': self.page.url,
+                'title': self.page.title()
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def close_tab(self, tab_index: Optional[int] = None) -> Dict[str, Any]:
+        """Close a specific tab or the current tab"""
+        try:
+            if len(self.pages) == 1:
+                return {'success': False, 'error': 'Cannot close the last tab'}
+            
+            # Default to current tab if not specified
+            if tab_index is None:
+                tab_index = self.current_tab_index
+            
+            if tab_index < 0 or tab_index >= len(self.pages):
+                return {
+                    'success': False,
+                    'error': f'Invalid tab index {tab_index}. Valid range: 0-{len(self.pages) - 1}'
+                }
+            
+            # Close the tab
+            self.pages[tab_index].close()
+            self.pages.pop(tab_index)
+            
+            # Adjust current tab index if needed
+            if self.current_tab_index >= len(self.pages):
+                self.current_tab_index = len(self.pages) - 1
+            elif tab_index <= self.current_tab_index and self.current_tab_index > 0:
+                self.current_tab_index -= 1
+            
+            # Update current page reference
+            self.page = self.pages[self.current_tab_index]
+            self.page.bring_to_front()
+            
+            return {
+                'success': True,
+                'closedTabIndex': tab_index,
+                'currentTabIndex': self.current_tab_index,
+                'remainingTabs': len(self.pages)
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def list_tabs(self) -> Dict[str, Any]:
+        """List all open tabs with their details"""
+        try:
+            tabs = []
+            for i, page in enumerate(self.pages):
+                tabs.append({
+                    'index': i,
+                    'url': page.url,
+                    'title': page.title(),
+                    'isCurrent': i == self.current_tab_index
+                })
+            
+            return {
+                'success': True,
+                'tabs': tabs,
+                'currentTabIndex': self.current_tab_index,
+                'totalTabs': len(self.pages)
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def next_tab(self) -> Dict[str, Any]:
+        """Switch to the next tab (circular)"""
+        next_index = (self.current_tab_index + 1) % len(self.pages)
+        return self.switch_to_tab(next_index)
+    
+    def previous_tab(self) -> Dict[str, Any]:
+        """Switch to the previous tab (circular)"""
+        prev_index = (self.current_tab_index - 1) % len(self.pages)
+        return self.switch_to_tab(prev_index)
+    
+    def go_back(self) -> Dict[str, Any]:
+        """Navigate back in current tab's history"""
+        try:
+            self.page.go_back(wait_until='domcontentloaded', timeout=30000)
+            return {
+                'success': True,
+                'url': self.page.url,
+                'title': self.page.title()
+            }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def go_forward(self) -> Dict[str, Any]:
+        """Navigate forward in current tab's history"""
+        try:
+            self.page.go_forward(wait_until='domcontentloaded', timeout=30000)
+            return {
+                'success': True,
+                'url': self.page.url,
+                'title': self.page.title()
+            }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def reload_tab(self, tab_index: Optional[int] = None) -> Dict[str, Any]:
+        """Reload a specific tab or the current tab"""
+        try:
+            if tab_index is None:
+                page_to_reload = self.page
+            else:
+                if tab_index < 0 or tab_index >= len(self.pages):
+                    return {'success': False, 'error': f'Invalid tab index {tab_index}'}
+                page_to_reload = self.pages[tab_index]
+            
+            page_to_reload.reload(wait_until='domcontentloaded', timeout=30000)
+            
+            return {
+                'success': True,
+                'url': page_to_reload.url,
+                'title': page_to_reload.title()
+            }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def close_other_tabs(self) -> Dict[str, Any]:
+        """Close all tabs except the current one"""
+        try:
+            current_page = self.page
+            
+            # Close all other pages
+            for i, page in enumerate(self.pages):
+                if i != self.current_tab_index:
+                    page.close()
+            
+            # Reset tracking
+            self.pages = [current_page]
+            self.current_tab_index = 0
+            self.page = current_page
+            
+            return {
+                'success': True,
+                'remainingTabs': 1
+            }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def duplicate_tab(self, tab_index: Optional[int] = None) -> Dict[str, Any]:
+        """Duplicate a tab by opening the same URL in a new tab"""
+        try:
+            if tab_index is None:
+                tab_index = self.current_tab_index
+            
+            if tab_index < 0 or tab_index >= len(self.pages):
+                return {'success': False, 'error': f'Invalid tab index {tab_index}'}
+            
+            url_to_duplicate = self.pages[tab_index].url
+            return self.open_new_tab(url_to_duplicate)
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}

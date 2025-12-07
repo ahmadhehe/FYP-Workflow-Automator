@@ -92,6 +92,66 @@ class BrowserAgent:
                 result = self.browser.get_page_load_status()
                 print(f"    ✓ Page load status checked")
                 return result
+            
+            # Tab Management Tools
+            elif tool_name == 'openNewTab':
+                url = arguments.get('url')
+                result = self.browser.open_new_tab(url)
+                print(f"    ✓ Opened new tab (index {result.get('tabIndex')})")
+                return result
+                
+            elif tool_name == 'switchToTab':
+                result = self.browser.switch_to_tab(arguments['tabIndex'])
+                print(f"    ✓ Switched to tab {arguments['tabIndex']}")
+                return result
+                
+            elif tool_name == 'closeTab':
+                tab_index = arguments.get('tabIndex')
+                result = self.browser.close_tab(tab_index)
+                print(f"    ✓ Closed tab")
+                return result
+                
+            elif tool_name == 'listTabs':
+                result = self.browser.list_tabs()
+                print(f"    ✓ Listed {result.get('totalTabs', 0)} tabs")
+                return result
+                
+            elif tool_name == 'nextTab':
+                result = self.browser.next_tab()
+                print(f"    ✓ Switched to next tab")
+                return result
+                
+            elif tool_name == 'previousTab':
+                result = self.browser.previous_tab()
+                print(f"    ✓ Switched to previous tab")
+                return result
+                
+            elif tool_name == 'goBack':
+                result = self.browser.go_back()
+                print(f"    ✓ Navigated back")
+                return result
+                
+            elif tool_name == 'goForward':
+                result = self.browser.go_forward()
+                print(f"    ✓ Navigated forward")
+                return result
+                
+            elif tool_name == 'reloadTab':
+                tab_index = arguments.get('tabIndex')
+                result = self.browser.reload_tab(tab_index)
+                print(f"    ✓ Reloaded tab")
+                return result
+                
+            elif tool_name == 'closeOtherTabs':
+                result = self.browser.close_other_tabs()
+                print(f"    ✓ Closed other tabs")
+                return result
+                
+            elif tool_name == 'duplicateTab':
+                tab_index = arguments.get('tabIndex')
+                result = self.browser.duplicate_tab(tab_index)
+                print(f"    ✓ Duplicated tab")
+                return result
                 
             else:
                 error = f"Unknown tool: {tool_name}"
