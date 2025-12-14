@@ -30,3 +30,10 @@ Thumbs.db
 screenshots/
 *.png
 *.jpg
+
+# Browser Profile (persistent browser data)
+browser_profile/
+
+# Workflow history and LLM logs (contains sensitive data)
+flows_history.json
+llm_logs/

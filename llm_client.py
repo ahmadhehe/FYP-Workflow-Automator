@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 import os
 from openai import OpenAI
 from anthropic import Anthropic
+import google.generativeai as genai
 
 
 class LLMClient:
@@ -17,6 +18,10 @@ class LLMClient:
         elif provider == "anthropic":
             self.client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
             self.model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+        elif provider == "gemini":
+            genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+            self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+            self.client = genai.GenerativeModel(self.model)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
     
@@ -101,6 +106,8 @@ Think step by step and be precise with element selection."""
             return self._openai_completion(messages, tools, tool_choice)
         elif self.provider == "anthropic":
             return self._anthropic_completion(messages, tools, tool_choice)
+        elif self.provider == "gemini":
+            return self._gemini_completion(messages, tools, tool_choice)
     
     def _openai_completion(self, messages, tools, tool_choice):
         """OpenAI completion"""
@@ -111,7 +118,15 @@ Think step by step and be precise with element selection."""
             tool_choice=tool_choice,
             temperature=0.7
         )
-        return response.choices[0].message
+        message = response.choices[0].message
+        # Attach usage data to message
+        if hasattr(response, 'usage') and response.usage:
+            message.usage = {
+                'input_tokens': response.usage.prompt_tokens,
+                'output_tokens': response.usage.completion_tokens,
+                'total_tokens': response.usage.total_tokens
+            }
+        return message
     
     def _anthropic_completion(self, messages, tools, tool_choice):
         """Anthropic completion - convert to their format"""
@@ -170,8 +185,16 @@ Think step by step and be precise with element selection."""
             tools=anthropic_tools
         )
         
-        # Convert response back to OpenAI format
-        return self._convert_anthropic_response(response)
+        # Convert response back to OpenAI format with usage data
+        message = self._convert_anthropic_response(response)
+        # Attach usage data
+        if hasattr(response, 'usage') and response.usage:
+            message.usage = {
+                'input_tokens': response.usage.input_tokens,
+                'output_tokens': response.usage.output_tokens,
+                'total_tokens': response.usage.input_tokens + response.usage.output_tokens
+            }
+        return message
     
     def _convert_anthropic_response(self, response):
         """Convert Anthropic response to OpenAI format"""
@@ -202,6 +225,224 @@ Think step by step and be precise with element selection."""
                         })()
                 
                 tool_calls.append(ToolCall(block.id, block.name, block.input))
+        
+        msg.content = ' '.join(text_content) if text_content else None
+        msg.tool_calls = tool_calls if tool_calls else None
+        
+        return msg
+    
+    def _gemini_completion(self, messages, tools, tool_choice):
+        """Gemini completion with function calling"""
+        import json
+        import uuid
+        from google.generativeai import protos
+        
+        def convert_schema_to_gemini(schema):
+            """Convert OpenAI-style JSON schema to Gemini protos.Schema format"""
+            if not schema or not isinstance(schema, dict):
+                return None
+            
+            # Map OpenAI types to Gemini types
+            type_mapping = {
+                'object': protos.Type.OBJECT,
+                'string': protos.Type.STRING,
+                'number': protos.Type.NUMBER,
+                'integer': protos.Type.INTEGER,
+                'boolean': protos.Type.BOOLEAN,
+                'array': protos.Type.ARRAY,
+            }
+            
+            schema_type = schema.get('type', 'object')
+            properties = schema.get('properties', {})
+            required = schema.get('required', [])
+            
+            # If no properties, return None (Gemini doesn't like empty schemas)
+            if not properties:
+                return None
+            
+            # Convert properties to Gemini Schema format
+            gemini_properties = {}
+            for prop_name, prop_schema in properties.items():
+                prop_type = prop_schema.get('type', 'string')
+                prop_kwargs = {
+                    'type': type_mapping.get(prop_type, protos.Type.STRING)
+                }
+                if 'description' in prop_schema:
+                    prop_kwargs['description'] = prop_schema['description']
+                if 'enum' in prop_schema:
+                    prop_kwargs['enum'] = prop_schema['enum']
+                if 'default' in prop_schema:
+                    # Gemini doesn't support default directly, skip it
+                    pass
+                gemini_properties[prop_name] = protos.Schema(**prop_kwargs)
+            
+            return protos.Schema(
+                type=type_mapping.get(schema_type, protos.Type.OBJECT),
+                properties=gemini_properties,
+                required=required if required else None
+            )
+        
+        # Convert OpenAI tool format to Gemini format
+        gemini_tools = []
+        for tool in tools:
+            if tool['type'] == 'function':
+                func_def = tool['function']
+                params = func_def.get('parameters', {})
+                
+                gemini_schema = convert_schema_to_gemini(params)
+                
+                gemini_tools.append(protos.FunctionDeclaration(
+                    name=func_def['name'],
+                    description=func_def['description'],
+                    parameters=gemini_schema
+                ))
+        
+        # Build Gemini tool config
+        from google.generativeai.types import content_types
+        tool_config = content_types.to_tool_config({
+            'function_calling_config': {'mode': 'AUTO'}
+        })
+        
+        # Convert messages to Gemini format
+        # Separate system message and build conversation history
+        system_msg = next((m['content'] for m in messages if m['role'] == 'system'), '')
+        
+        # Create a new model with system instruction for this request
+        model_with_system = genai.GenerativeModel(
+            self.model,
+            system_instruction=system_msg,
+            tools=gemini_tools
+        )
+        
+        # Build chat history
+        gemini_history = []
+        for msg in messages:
+            if msg['role'] == 'system':
+                continue  # Already handled as system instruction
+            elif msg['role'] == 'user':
+                gemini_history.append({
+                    'role': 'user',
+                    'parts': [{'text': msg['content']}]
+                })
+            elif msg['role'] == 'assistant':
+                parts = []
+                if msg.get('content'):
+                    parts.append({'text': msg['content']})
+                if msg.get('tool_calls'):
+                    for tc in msg['tool_calls']:
+                        parts.append({
+                            'function_call': {
+                                'name': tc['function']['name'],
+                                'args': json.loads(tc['function']['arguments'])
+                            }
+                        })
+                if parts:
+                    gemini_history.append({
+                        'role': 'model',
+                        'parts': parts
+                    })
+            elif msg['role'] == 'tool':
+                # Tool results in Gemini format
+                tool_call_id = msg.get('tool_call_id', 'unknown')
+                # Find the function name from the previous assistant message
+                func_name = 'unknown'
+                for prev_msg in reversed(messages[:messages.index(msg)]):
+                    if prev_msg.get('tool_calls'):
+                        for tc in prev_msg['tool_calls']:
+                            if tc['id'] == tool_call_id:
+                                func_name = tc['function']['name']
+                                break
+                        break
+                
+                try:
+                    result_data = json.loads(msg['content'])
+                except:
+                    result_data = {'result': msg['content']}
+                
+                gemini_history.append({
+                    'role': 'user',
+                    'parts': [{
+                        'function_response': {
+                            'name': func_name,
+                            'response': result_data
+                        }
+                    }]
+                })
+        
+        # Start chat and get response
+        chat = model_with_system.start_chat(history=gemini_history[:-1] if gemini_history else [])
+        
+        # Get the last message to send
+        if gemini_history:
+            last_msg = gemini_history[-1]
+            response = chat.send_message(last_msg['parts'], tool_config=tool_config)
+        else:
+            response = chat.send_message("Hello", tool_config=tool_config)
+        
+        # Convert response back to OpenAI format with usage data
+        message = self._convert_gemini_response(response)
+        # Attach usage data
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            message.usage = {
+                'input_tokens': response.usage_metadata.prompt_token_count,
+                'output_tokens': response.usage_metadata.candidates_token_count,
+                'total_tokens': response.usage_metadata.total_token_count
+            }
+        return message
+    
+    def _convert_gemini_response(self, response):
+        """Convert Gemini response to OpenAI format"""
+        import json
+        import uuid
+        
+        class Message:
+            def __init__(self):
+                self.content = None
+                self.tool_calls = None
+        
+        msg = Message()
+        
+        # Extract content and function calls
+        text_content = []
+        tool_calls = []
+        
+        for part in response.parts:
+            if hasattr(part, 'text') and part.text:
+                text_content.append(part.text)
+            elif hasattr(part, 'function_call') and part.function_call:
+                fc = part.function_call
+                
+                # Convert Gemini's MapComposite args to a regular dict
+                # fc.args is a special proto object, need to convert it properly
+                try:
+                    if hasattr(fc.args, 'items'):
+                        # It's a dict-like object
+                        args_dict = dict(fc.args.items())
+                    elif hasattr(fc.args, '_pb'):
+                        # It's a protobuf object, convert via MessageToDict
+                        from google.protobuf.json_format import MessageToDict
+                        args_dict = MessageToDict(fc.args._pb)
+                    else:
+                        # Try to convert it as-is
+                        args_dict = dict(fc.args) if fc.args else {}
+                except Exception as e:
+                    print(f"Warning: Failed to convert Gemini args: {e}")
+                    args_dict = {}
+                
+                class ToolCall:
+                    def __init__(self, id, name, arguments):
+                        self.id = id
+                        self.type = 'function'
+                        self.function = type('obj', (object,), {
+                            'name': name,
+                            'arguments': arguments
+                        })()
+                
+                tool_calls.append(ToolCall(
+                    f"call_{uuid.uuid4().hex[:8]}",
+                    fc.name,
+                    json.dumps(args_dict)
+                ))
         
         msg.content = ' '.join(text_content) if text_content else None
         msg.tool_calls = tool_calls if tool_calls else None

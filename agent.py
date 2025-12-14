@@ -12,16 +12,41 @@ load_dotenv()
 
 
 class BrowserAgent:
-    def __init__(self, provider: str = None, headless: bool = False):
+    def __init__(self, provider: str = None, headless: bool = False, use_profile: bool = True):
         """Initialize the browser agent"""
         provider = provider or os.getenv("DEFAULT_PROVIDER", "openai")
         
-        self.browser = BrowserController(headless=headless)
+        self.provider = provider  # Track current provider
+        self.browser = BrowserController(headless=headless, use_profile=use_profile)
         self.llm = LLMClient(provider=provider)
         self.conversation_history: List[Dict[str, Any]] = []
         self.max_iterations = 15
         
+        # Token tracking for current workflow
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        
         print(f"✓ Agent initialized with {provider}")
+    
+    def set_provider(self, provider: str):
+        """Change the LLM provider"""
+        if provider != self.provider:
+            print(f"✓ Switching provider from {self.provider} to {provider}")
+            self.provider = provider
+            self.llm = LLMClient(provider=provider)
+    
+    def reset_token_tracking(self):
+        """Reset token counters for a new workflow"""
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+    
+    def get_token_usage(self) -> Dict[str, int]:
+        """Get current token usage"""
+        return {
+            'input_tokens': self.total_input_tokens,
+            'output_tokens': self.total_output_tokens,
+            'total_tokens': self.total_input_tokens + self.total_output_tokens
+        }
     
     def start(self):
         """Start the browser"""

@@ -6,13 +6,15 @@ import {
   Cog6ToothIcon,
   CommandLineIcon,
   SignalIcon,
-  SignalSlashIcon
+  SignalSlashIcon,
+  CurrencyDollarIcon
 } from '@heroicons/react/24/outline';
 import clsx from 'clsx';
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: HomeIcon },
   { name: 'History', href: '/history', icon: ClockIcon },
+  { name: 'Costs', href: '/costs', icon: CurrencyDollarIcon },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon },
 ];
 

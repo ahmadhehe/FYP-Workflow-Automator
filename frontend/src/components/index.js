@@ -6,3 +6,4 @@ export { ResultPanel } from './ResultPanel';
 export { FlowHistory } from './FlowHistory';
 export { Settings } from './Settings';
 export { Dashboard } from './Dashboard';
+export { Costs } from './Costs';

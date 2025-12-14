@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
-import { Sidebar, Dashboard, FlowHistory, Settings } from './components';
+import { Sidebar, Dashboard, FlowHistory, Settings, Costs } from './components';
 import { useWebSocket } from './hooks/useWebSocket';
 import api from './services/api';
 
@@ -76,6 +76,10 @@ function App() {
               element={
                 <FlowHistory onRerun={handleRerunFlow} />
               } 
+            />
+            <Route 
+              path="/costs" 
+              element={<Costs />} 
             />
             <Route 
               path="/settings" 

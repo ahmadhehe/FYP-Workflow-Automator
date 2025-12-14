@@ -1,64 +1,136 @@
 """
 Browser Controller - Handles all browser automation using Playwright
 """
-from playwright.sync_api import sync_playwright, Page, Browser, Playwright
+from playwright.sync_api import sync_playwright, Page, Browser, Playwright, BrowserContext
 from typing import Dict, List, Any, Optional
 import base64
 import time
+import os
+
+# Default profile directory for persistent browser data
+DEFAULT_PROFILE_DIR = os.path.join(os.path.dirname(__file__), "browser_profile")
 
 
 class BrowserController:
-    def __init__(self, headless: bool = False):
+    def __init__(self, headless: bool = False, use_profile: bool = True):
         self.headless = headless
+        self.use_profile = use_profile
+        self.profile_dir = DEFAULT_PROFILE_DIR
         self.playwright: Optional[Playwright] = None
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
-        self.context = None
+        self.context: Optional[BrowserContext] = None
         self.pages: List[Page] = []  # Track all open tabs
         self.current_tab_index: int = 0  # Currently active tab
         self.snapshot_cache: Dict[str, Any] = {}
+        self._is_persistent_context = False
         
     def start(self):
-        """Initialize browser"""
+        """Initialize browser with optional persistent profile"""
         self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(
-            headless=self.headless,
-            args=['--start-maximized']
-        )
-        self.context = self.browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        )
-        self.page = self.context.new_page()
+        
+        # Common browser arguments to improve compatibility
+        browser_args = [
+            '--start-maximized',
+            '--disable-blink-features=AutomationControlled',  # Hide automation
+            '--disable-infobars',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-web-security',  # Help with CORS and some loading issues
+            '--disable-features=IsolateOrigins,site-per-process',  # Improve compatibility
+        ]
+        
+        # Full user agent string for better compatibility
+        user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+        
+        if self.use_profile:
+            # Use persistent context - this saves cookies, localStorage, credentials
+            # Create profile directory if it doesn't exist
+            os.makedirs(self.profile_dir, exist_ok=True)
+            
+            self.context = self.playwright.chromium.launch_persistent_context(
+                user_data_dir=self.profile_dir,
+                headless=self.headless,
+                args=browser_args,
+                no_viewport=True,
+                user_agent=user_agent,
+                ignore_https_errors=True,
+                java_script_enabled=True,
+                bypass_csp=True,  # Bypass Content Security Policy
+                # Enable permissions for better compatibility
+                permissions=['notifications', 'geolocation'],
+                # Set longer timeout for slow-loading sites
+                slow_mo=50,  # Add small delay between actions for stability
+            )
+            self._is_persistent_context = True
+            self.browser = None  # Persistent context doesn't use separate browser
+            
+            # Get the first page or create one
+            if self.context.pages:
+                self.page = self.context.pages[0]
+            else:
+                self.page = self.context.new_page()
+        else:
+            # Non-persistent context (original behavior)
+            self.browser = self.playwright.chromium.launch(
+                headless=self.headless,
+                args=browser_args,
+                slow_mo=50,
+            )
+            self.context = self.browser.new_context(
+                no_viewport=True,
+                user_agent=user_agent,
+                ignore_https_errors=True,
+                java_script_enabled=True,
+                bypass_csp=True,
+                permissions=['notifications', 'geolocation'],
+            )
+            self.page = self.context.new_page()
+            self._is_persistent_context = False
+        
         self.pages = [self.page]
         self.current_tab_index = 0
-        print("✓ Browser started")
+        print(f"✓ Browser started {'with persistent profile' if self.use_profile else '(no profile)'}")
         
     def close(self):
         """Close browser"""
-        if self.browser:
-            self.browser.close()
+        if self._is_persistent_context:
+            if self.context:
+                self.context.close()
+        else:
+            if self.browser:
+                self.browser.close()
         if self.playwright:
             self.playwright.stop()
         self.pages = []
         self.current_tab_index = 0
+        self.context = None
+        self.browser = None
+        self._is_persistent_context = False
         print("✓ Browser closed")
         
     def navigate(self, url: str) -> Dict[str, Any]:
         """Navigate to URL with smart waiting"""
         try:
-            # Navigate - use 'domcontentloaded' instead of 'networkidle' for faster/more reliable navigation
-            # 'networkidle' can timeout on sites like YouTube that constantly make requests
-            self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            # Navigate with commit wait - this is more reliable for modern SPAs
+            # Use 'commit' instead of 'domcontentloaded' for better reliability
+            # Increase timeout for slow-loading sites like Outlook
+            self.page.goto(url, wait_until='commit', timeout=60000)
             
-            # Wait for body to be visible
+            # Wait for body to be visible with longer timeout
             try:
-                self.page.wait_for_selector('body', state='visible', timeout=10000)
+                self.page.wait_for_selector('body', state='visible', timeout=15000)
             except:
                 pass  # Some pages may not have body immediately visible
             
-            # Small delay for initial rendering
-            self.page.wait_for_timeout(500)
+            # Give additional time for JavaScript to initialize
+            self.page.wait_for_timeout(1000)
+            
+            # Wait for any pending navigation
+            try:
+                self.page.wait_for_load_state('domcontentloaded', timeout=10000)
+            except:
+                pass  # Continue even if this times out
             
             return {
                 'success': True,
@@ -181,6 +253,14 @@ class BrowserController:
     def _is_in_viewport(self, rect: Dict) -> bool:
         """Check if element is in viewport"""
         viewport = self.page.viewport_size
+        
+        # If no viewport is set (no_viewport=True), get window size instead
+        if viewport is None:
+            viewport = self.page.evaluate('''() => ({
+                width: window.innerWidth,
+                height: window.innerHeight
+            })''')
+        
         return (
             rect['x'] >= 0 and 
             rect['y'] >= 0 and

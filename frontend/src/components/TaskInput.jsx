@@ -10,12 +10,13 @@ import clsx from 'clsx';
 const providers = [
   { id: 'openai', name: 'OpenAI', description: 'GPT-4 Turbo' },
   { id: 'anthropic', name: 'Anthropic', description: 'Claude 3.5 Sonnet' },
+  { id: 'gemini', name: 'Google Gemini', description: 'Gemini 2.5 Flash' },
 ];
 
 export function TaskInput({ onSubmit, isRunning, onStop }) {
   const [instruction, setInstruction] = useState('');
   const [initialUrl, setInitialUrl] = useState('');
-  const [provider, setProvider] = useState('openai');
+  const [provider, setProvider] = useState(() => localStorage.getItem('defaultProvider') || 'openai');
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const handleSubmit = (e) => {

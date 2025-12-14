@@ -5,13 +5,17 @@ import {
   ServerIcon,
   PaintBrushIcon,
   TrashIcon,
-  CheckIcon
+  CheckIcon,
+  UserCircleIcon,
+  GlobeAltIcon
 } from '@heroicons/react/24/outline';
 import api from '../services/api';
 import clsx from 'clsx';
 
 export function Settings() {
   const [browserStatus, setBrowserStatus] = useState(null);
+  const [profileStatus, setProfileStatus] = useState(null);
+  const [profileUrl, setProfileUrl] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -28,8 +32,12 @@ export function Settings() {
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const status = await api.getStatus();
+        const [status, profile] = await Promise.all([
+          api.getStatus(),
+          api.getProfileStatus()
+        ]);
         setBrowserStatus(status);
+        setProfileStatus(profile);
       } catch (error) {
         console.error('Failed to fetch status:', error);
       } finally {
@@ -83,6 +91,41 @@ export function Settings() {
       alert('Flow history cleared successfully');
     } catch (error) {
       console.error('Failed to clear history:', error);
+    }
+  };
+
+  const handleStartProfileBrowser = async () => {
+    try {
+      await api.startProfileBrowser(profileUrl || null);
+      const profile = await api.getProfileStatus();
+      setProfileStatus(profile);
+    } catch (error) {
+      console.error('Failed to start profile browser:', error);
+      alert(error.message || 'Failed to start profile browser');
+    }
+  };
+
+  const handleStopProfileBrowser = async () => {
+    try {
+      await api.stopProfileBrowser();
+      const profile = await api.getProfileStatus();
+      setProfileStatus(profile);
+    } catch (error) {
+      console.error('Failed to stop profile browser:', error);
+    }
+  };
+
+  const handleClearProfile = async () => {
+    if (!window.confirm('Are you sure you want to clear all saved credentials? You will need to log in to websites again.')) return;
+    
+    try {
+      await api.clearProfile();
+      const profile = await api.getProfileStatus();
+      setProfileStatus(profile);
+      alert('Profile data cleared successfully');
+    } catch (error) {
+      console.error('Failed to clear profile:', error);
+      alert(error.message || 'Failed to clear profile');
     }
   };
 
@@ -141,6 +184,105 @@ export function Settings() {
         </div>
       </div>
 
+      {/* Profile Management */}
+      <div className="card">
+        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+          <div className="flex items-center gap-3">
+            <UserCircleIcon className="h-5 w-5 text-indigo-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Saved Credentials</h2>
+          </div>
+        </div>
+        <div className="p-6 space-y-4 bg-white">
+          <p className="text-sm text-gray-600 mb-4">
+            Launch a browser to log into websites. Your credentials, cookies, and sessions will be saved 
+            and automatically used when running automation tasks.
+          </p>
+          
+          {/* Profile Status */}
+          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div>
+              <p className="text-gray-700 font-medium">Profile Status</p>
+              <p className="text-sm text-gray-500">
+                {profileStatus?.profile_exists 
+                  ? `Profile saved (${profileStatus?.profile_size_mb || 0} MB)`
+                  : 'No saved profile'
+                }
+              </p>
+            </div>
+            <span className={clsx(
+              'px-3 py-1 rounded-full text-sm font-medium',
+              profileStatus?.profile_browser_running 
+                ? 'bg-indigo-100 text-indigo-700'
+                : profileStatus?.profile_exists
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-gray-100 text-gray-500'
+            )}>
+              {profileStatus?.profile_browser_running 
+                ? 'Browser Open' 
+                : profileStatus?.profile_exists 
+                  ? 'Saved'
+                  : 'Not Set Up'
+              }
+            </span>
+          </div>
+
+          {/* URL Input for Profile Browser */}
+          <div>
+            <label className="label">Starting URL (optional)</label>
+            <div className="flex gap-2">
+              <input
+                type="url"
+                value={profileUrl}
+                onChange={(e) => setProfileUrl(e.target.value)}
+                className="input flex-1"
+                placeholder="https://example.com/login"
+                disabled={profileStatus?.profile_browser_running}
+              />
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Enter a URL to navigate to when opening the profile browser
+            </p>
+          </div>
+
+          {/* Profile Browser Controls */}
+          <div className="flex items-center gap-3">
+            {profileStatus?.profile_browser_running ? (
+              <button 
+                onClick={handleStopProfileBrowser} 
+                className="btn-primary py-2 px-4 flex items-center gap-2"
+              >
+                <CheckIcon className="h-4 w-4" />
+                Done Setting Up
+              </button>
+            ) : (
+              <button 
+                onClick={handleStartProfileBrowser} 
+                className="btn-primary py-2 px-4 flex items-center gap-2"
+                disabled={browserStatus?.browser_running}
+              >
+                <GlobeAltIcon className="h-4 w-4" />
+                Open Profile Browser
+              </button>
+            )}
+            
+            {profileStatus?.profile_exists && !profileStatus?.profile_browser_running && (
+              <button 
+                onClick={handleClearProfile} 
+                className="btn-danger py-2 px-4"
+              >
+                Clear Saved Credentials
+              </button>
+            )}
+          </div>
+          
+          {browserStatus?.browser_running && !profileStatus?.profile_browser_running && (
+            <p className="text-sm text-amber-600 mt-2">
+              ⚠️ Stop the automation browser first to set up credentials
+            </p>
+          )}
+        </div>
+      </div>
+
       {/* AI Provider */}
       <div className="card">
         <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
@@ -159,6 +301,7 @@ export function Settings() {
             >
               <option value="openai">OpenAI (GPT-4 Turbo)</option>
               <option value="anthropic">Anthropic (Claude 3.5 Sonnet)</option>
+              <option value="gemini">Google Gemini (2.5 Flash)</option>
             </select>
             <p className="text-xs text-gray-500 mt-2">
               Make sure you have the corresponding API key set in your environment variables

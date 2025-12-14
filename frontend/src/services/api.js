@@ -80,6 +80,29 @@ class ApiService {
   async clearFlows() {
     return this.request('/flows', { method: 'DELETE' });
   }
+
+  // Profile management
+  async startProfileBrowser(url = null) {
+    const endpoint = url ? `/profile/start?url=${encodeURIComponent(url)}` : '/profile/start';
+    return this.request(endpoint, { method: 'POST' });
+  }
+
+  async stopProfileBrowser() {
+    return this.request('/profile/stop', { method: 'POST' });
+  }
+
+  async getProfileStatus() {
+    return this.request('/profile/status');
+  }
+
+  async clearProfile() {
+    return this.request('/profile/clear', { method: 'DELETE' });
+  }
+
+  // Costs analytics
+  async getCosts(timeRange = 'all') {
+    return this.request(`/costs?time_range=${timeRange}`);
+  }
 }
 
 export const api = new ApiService();

@@ -8,14 +8,97 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from agent import BrowserAgent
+from browser_controller import BrowserController, DEFAULT_PROFILE_DIR
 from dotenv import load_dotenv
 import uvicorn
 import asyncio
 import json
 import os
 import uuid
+import shutil
+import logging
+from pathlib import Path
 
 load_dotenv()
+
+# ============================================================================
+# LLM Interaction Logging Setup
+# ============================================================================
+
+LLM_LOG_DIR = Path("llm_logs")
+LLM_LOG_DIR.mkdir(exist_ok=True)
+
+def setup_llm_logger(flow_id: str) -> logging.Logger:
+    """Create a logger for a specific workflow to track LLM interactions"""
+    logger = logging.getLogger(f"llm_interaction_{flow_id}")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()  # Clear any existing handlers
+    
+    # Create log file for this workflow
+    log_file = LLM_LOG_DIR / f"{flow_id}.log"
+    handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+    handler.setLevel(logging.INFO)
+    
+    # Format: timestamp - level - message
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    
+    return logger
+
+def log_llm_interaction(logger: logging.Logger, iteration: int, messages: List[Dict], response: Any, provider: str):
+    """Log detailed LLM interaction for cost analysis"""
+    logger.info(f"\n{'='*80}")
+    logger.info(f"ITERATION {iteration} - Provider: {provider}")
+    logger.info(f"{'='*80}\n")
+    
+    # Log input messages
+    logger.info("INPUT MESSAGES:")
+    for i, msg in enumerate(messages):
+        logger.info(f"\n--- Message {i+1} ({msg.get('role', 'unknown')}) ---")
+        if msg.get('content'):
+            content = msg['content']
+            if len(content) > 1000:
+                logger.info(f"{content[:500]}...\n[TRUNCATED {len(content)} chars total]\n...{content[-500:]}")
+            else:
+                logger.info(content)
+        if msg.get('tool_calls'):
+            logger.info(f"Tool Calls: {json.dumps(msg['tool_calls'], indent=2)}")
+    
+    # Log response
+    logger.info(f"\n{'='*40}")
+    logger.info("LLM RESPONSE:")
+    logger.info(f"{'='*40}\n")
+    if hasattr(response, 'content') and response.content:
+        logger.info(f"Content: {response.content}")
+    if hasattr(response, 'tool_calls') and response.tool_calls:
+        logger.info("\nTool Calls:")
+        for tc in response.tool_calls:
+            logger.info(f"  - {tc.function.name}: {tc.function.arguments}")
+    
+    # Log token usage if available
+    if hasattr(response, 'usage') and response.usage:
+        logger.info(f"\n{'='*40}")
+        logger.info("TOKEN USAGE:")
+        logger.info(f"{'='*40}")
+        logger.info(f"Input tokens:  {response.usage.get('input_tokens', 0):,}")
+        logger.info(f"Output tokens: {response.usage.get('output_tokens', 0):,}")
+        logger.info(f"Total tokens:  {response.usage.get('total_tokens', 0):,}")
+        
+        # Calculate cost for this specific call
+        input_tokens = response.usage.get('input_tokens', 0)
+        output_tokens = response.usage.get('output_tokens', 0)
+        # We'll calculate cost inline to avoid circular import
+        pricing = {
+            "openai": {"input": 10, "output": 30},
+            "anthropic": {"input": 3, "output": 15},
+            "gemini": {"input": 0.075, "output": 0.30}
+        }
+        p = pricing.get(provider, pricing["openai"])
+        cost = (input_tokens / 1_000_000) * p["input"] + (output_tokens / 1_000_000) * p["output"]
+        logger.info(f"\nCost for this call: ${cost:.6f}")
+    
+    logger.info(f"\n{'='*80}\n")
 
 app = FastAPI(title="Browser Automation Agent API", version="2.0.0")
 
@@ -87,6 +170,9 @@ agent: Optional[BrowserAgent] = None
 current_task: Optional[Dict[str, Any]] = None
 task_lock = asyncio.Lock()
 websocket_clients: List[WebSocket] = []
+
+# Profile browser state (separate from automation agent)
+profile_browser: Optional[BrowserController] = None
 
 # ============================================================================
 # WebSocket Management
@@ -172,10 +258,10 @@ class EventEmitter:
 # Agent Execution (Async wrapper using thread pool for sync Playwright)
 # ============================================================================
 
-def _create_and_start_agent(provider: str, headless: bool) -> BrowserAgent:
+def _create_and_start_agent(provider: str, headless: bool, use_profile: bool = True) -> BrowserAgent:
     """Synchronous function to create and start agent (runs in thread pool)"""
-    print(f"[Server] Creating agent with provider={provider}, headless={headless}")
-    agent = BrowserAgent(provider=provider, headless=headless)
+    print(f"[Server] Creating agent with provider={provider}, headless={headless}, use_profile={use_profile}")
+    agent = BrowserAgent(provider=provider, headless=headless, use_profile=use_profile)
     agent.start()
     print(f"[Server] Agent started successfully")
     return agent
@@ -203,11 +289,21 @@ async def run_agent_task(
             await emitter.emit("status", {"message": "Starting browser...", "status": "initializing"})
             # Run sync Playwright code in thread pool
             agent = await asyncio.to_thread(_create_and_start_agent, provider, False)
+        elif agent.provider != provider:
+            # Provider changed, update the LLM client
+            await emitter.emit("status", {"message": f"Switching to {provider}...", "status": "initializing"})
+            await asyncio.to_thread(agent.set_provider, provider)
         
         await emitter.emit("status", {"message": "Task started", "status": "running"})
         
+        # Setup LLM logger for this workflow
+        llm_logger = setup_llm_logger(flow_id)
+        llm_logger.info(f"Starting workflow: {instruction}")
+        llm_logger.info(f"Provider: {provider}")
+        llm_logger.info(f"Initial URL: {initial_url}\n")
+        
         # Run the agent in a thread pool to avoid blocking the event loop
-        result = await run_agent_with_events(agent, instruction, initial_url, emitter)
+        result = await run_agent_with_events(agent, instruction, initial_url, emitter, llm_logger)
         
         await emitter.emit("status", {"message": "Task completed", "status": "completed"})
         
@@ -218,6 +314,27 @@ async def run_agent_task(
         await emitter.emit("status", {"message": f"Task failed: {error}", "status": "failed"})
     
     finally:
+        # Get token usage and calculate cost
+        token_usage = agent.get_token_usage() if agent else {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
+        cost_data = calculate_cost(provider, token_usage['input_tokens'], token_usage['output_tokens'])
+        
+        # Log final workflow summary
+        if 'llm_logger' in locals():
+            llm_logger.info(f"\n{'='*80}")
+            llm_logger.info("WORKFLOW COMPLETE")
+            llm_logger.info(f"{'='*80}")
+            llm_logger.info(f"Status: {status}")
+            llm_logger.info(f"Total Input Tokens: {token_usage['input_tokens']:,}")
+            llm_logger.info(f"Total Output Tokens: {token_usage['output_tokens']:,}")
+            llm_logger.info(f"Total Tokens: {token_usage['total_tokens']:,}")
+            llm_logger.info(f"Total Cost: ${cost_data['total_cost']:.6f}")
+            if error:
+                llm_logger.error(f"Error: {error}")
+            # Close logger handlers
+            for handler in llm_logger.handlers:
+                handler.close()
+                llm_logger.removeHandler(handler)
+        
         flow = {
             "id": flow_id,
             "instruction": instruction,
@@ -228,7 +345,14 @@ async def run_agent_task(
             "error": error,
             "actions": emitter.get_actions(),
             "created_at": emitter.start_time.isoformat(),
-            "completed_at": datetime.now().isoformat()
+            "completed_at": datetime.now().isoformat(),
+            # Add actual token usage and costs
+            "input_tokens": token_usage['input_tokens'],
+            "output_tokens": token_usage['output_tokens'],
+            "total_tokens": token_usage['total_tokens'],
+            "input_cost": cost_data['input_cost'],
+            "output_cost": cost_data['output_cost'],
+            "total_cost": cost_data['total_cost']
         }
         save_flow(flow)
         
@@ -247,7 +371,8 @@ async def run_agent_with_events(
     agent: BrowserAgent,
     instruction: str,
     initial_url: Optional[str],
-    emitter: EventEmitter
+    emitter: EventEmitter,
+    llm_logger: logging.Logger = None
 ) -> str:
     """Run agent with event emission for each action"""
     import json as json_module
@@ -273,6 +398,9 @@ async def run_agent_with_events(
         {'role': 'user', 'content': instruction}
     ]
     
+    # Reset token tracking for this workflow
+    agent.reset_token_tracking()
+    
     tools = agent.llm.get_tools_definition()
     
     for iteration in range(agent.max_iterations):
@@ -295,6 +423,23 @@ async def run_agent_with_events(
                 tools,
                 'auto'
             )
+            
+            # Track token usage from this response
+            if hasattr(response, 'usage') and response.usage:
+                agent.total_input_tokens += response.usage.get('input_tokens', 0)
+                agent.total_output_tokens += response.usage.get('output_tokens', 0)
+            
+            # Log the LLM interaction for cost analysis
+            if llm_logger:
+                await asyncio.to_thread(
+                    log_llm_interaction,
+                    llm_logger,
+                    iteration + 1,
+                    agent.conversation_history,
+                    response,
+                    agent.provider
+                )
+                
         except Exception as e:
             await emitter.emit("error", {"message": f"LLM Error: {e}"})
             return f"Error: {e}"
@@ -453,6 +598,149 @@ async def stop_browser():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ============================================================================
+# Profile Browser Management
+# ============================================================================
+
+def _start_profile_browser() -> BrowserController:
+    """Synchronous function to start profile browser (runs in thread pool)"""
+    browser = BrowserController(headless=False, use_profile=True)
+    browser.start()
+    return browser
+
+def _close_profile_browser(browser: BrowserController):
+    """Synchronous function to close profile browser (runs in thread pool)"""
+    browser.close()
+
+@app.post("/profile/start")
+async def start_profile_browser(url: str = None):
+    """
+    Launch a browser for setting up profiles (logging into websites).
+    The browser uses a persistent profile that saves cookies, localStorage,
+    and credentials. Users can navigate to websites, log in, and their
+    sessions will be preserved for future automation tasks.
+    """
+    global profile_browser, agent
+    
+    try:
+        # Don't start if automation agent is running
+        if agent:
+            return {
+                "status": "error",
+                "message": "Please stop the automation browser first before setting up profiles"
+            }
+        
+        if profile_browser:
+            return {
+                "status": "already_running",
+                "message": "Profile browser is already running. Use it to set up your credentials."
+            }
+        
+        # Start profile browser in thread pool
+        profile_browser = await asyncio.to_thread(_start_profile_browser)
+        
+        # Navigate to URL if provided
+        if url:
+            await asyncio.to_thread(profile_browser.navigate, url)
+        
+        await broadcast_event({
+            "type": "profile_browser_started",
+            "data": {"url": url}
+        })
+        
+        return {
+            "status": "started",
+            "message": "Profile browser launched. Navigate to websites and log in to save your credentials.",
+            "profile_dir": DEFAULT_PROFILE_DIR
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/profile/stop")
+async def stop_profile_browser():
+    """
+    Close the profile browser. All credentials and sessions are automatically
+    saved to the profile directory.
+    """
+    global profile_browser
+    
+    try:
+        if not profile_browser:
+            return {"status": "not_running", "message": "Profile browser is not running"}
+        
+        # Close profile browser
+        await asyncio.to_thread(_close_profile_browser, profile_browser)
+        profile_browser = None
+        
+        await broadcast_event({
+            "type": "profile_browser_stopped",
+            "data": {}
+        })
+        
+        return {
+            "status": "stopped",
+            "message": "Profile browser closed. Your credentials have been saved."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/profile/status")
+async def get_profile_status():
+    """Get the status of the profile browser and saved profile"""
+    global profile_browser
+    
+    profile_exists = os.path.exists(DEFAULT_PROFILE_DIR)
+    profile_size = 0
+    
+    if profile_exists:
+        # Calculate profile directory size
+        for dirpath, dirnames, filenames in os.walk(DEFAULT_PROFILE_DIR):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                profile_size += os.path.getsize(fp)
+    
+    return {
+        "profile_browser_running": profile_browser is not None,
+        "profile_exists": profile_exists,
+        "profile_dir": DEFAULT_PROFILE_DIR,
+        "profile_size_mb": round(profile_size / (1024 * 1024), 2) if profile_size > 0 else 0
+    }
+
+@app.delete("/profile/clear")
+async def clear_profile():
+    """
+    Clear all saved credentials and browser data.
+    This will delete all cookies, localStorage, and saved logins.
+    """
+    global profile_browser
+    
+    try:
+        if profile_browser:
+            return {
+                "status": "error",
+                "message": "Please close the profile browser first"
+            }
+        
+        if os.path.exists(DEFAULT_PROFILE_DIR):
+            shutil.rmtree(DEFAULT_PROFILE_DIR)
+            
+            await broadcast_event({
+                "type": "profile_cleared",
+                "data": {}
+            })
+            
+            return {
+                "status": "cleared",
+                "message": "Profile data has been cleared. You will need to log in to websites again."
+            }
+        else:
+            return {
+                "status": "not_found",
+                "message": "No profile data found"
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/task", response_model=TaskResponse)
 async def run_task(request: TaskRequest, background_tasks: BackgroundTasks):
     """Run a task with the agent"""
@@ -592,6 +880,142 @@ async def clear_flows():
     """Clear all flow history"""
     save_flows([])
     return {"status": "cleared"}
+
+# ============================================================================
+# Cost Analytics Endpoints
+# ============================================================================
+
+# Pricing per 1M tokens (as of Dec 2024)
+PRICING = {
+    "openai": {
+        "input": 10.00,   # $10 per 1M input tokens
+        "output": 30.00,  # $30 per 1M output tokens
+    },
+    "anthropic": {
+        "input": 3.00,    # $3 per 1M input tokens
+        "output": 15.00,  # $15 per 1M output tokens
+    },
+    "gemini": {
+        "input": 0.3,   # $0.075 per 1M input tokens
+        "output": 2.5,   # $0.30 per 1M output tokens
+    }
+}
+
+def calculate_cost(provider: str, input_tokens: int, output_tokens: int) -> Dict[str, float]:
+    """Calculate cost based on provider and token counts"""
+    pricing = PRICING.get(provider, PRICING["openai"])
+    
+    input_cost = (input_tokens / 1_000_000) * pricing["input"]
+    output_cost = (output_tokens / 1_000_000) * pricing["output"]
+    total_cost = input_cost + output_cost
+    
+    return {
+        "input_cost": input_cost,
+        "output_cost": output_cost,
+        "total_cost": total_cost
+    }
+
+def estimate_tokens(text: str) -> int:
+    """Rough estimation: ~4 characters per token"""
+    return len(text) // 4
+
+@app.get("/costs")
+async def get_costs(time_range: str = "all"):
+    """Get cost analytics"""
+    from datetime import datetime, timedelta
+    
+    flows = load_flows()
+    
+    # Filter by time range
+    now = datetime.now()
+    if time_range == "today":
+        cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        flows = [f for f in flows if datetime.fromisoformat(f["created_at"]) >= cutoff]
+    elif time_range == "week":
+        cutoff = now - timedelta(days=7)
+        flows = [f for f in flows if datetime.fromisoformat(f["created_at"]) >= cutoff]
+    elif time_range == "month":
+        cutoff = now - timedelta(days=30)
+        flows = [f for f in flows if datetime.fromisoformat(f["created_at"]) >= cutoff]
+    
+    # Calculate costs per flow
+    total_cost = 0
+    total_tokens = 0
+    by_provider = {}
+    workflow_costs = []
+    
+    for flow in flows:
+        provider = flow.get("provider", "openai")
+        
+        # Check if flow has saved token/cost data (new flows will have this)
+        if "total_tokens" in flow and "total_cost" in flow:
+            # Use saved actual data
+            input_tokens = flow.get("input_tokens", 0)
+            output_tokens = flow.get("output_tokens", 0)
+            total_flow_tokens = flow.get("total_tokens", 0)
+            input_cost = flow.get("input_cost", 0)
+            output_cost = flow.get("output_cost", 0)
+            total_flow_cost = flow.get("total_cost", 0)
+        else:
+            # Fallback to estimation for old flows without saved data
+            instruction = flow.get("instruction", "")
+            result = flow.get("result", "")
+            actions = flow.get("actions", [])
+            
+            input_tokens = estimate_tokens(instruction) + sum(estimate_tokens(str(a)) for a in actions) * 2
+            output_tokens = estimate_tokens(result) + len(actions) * 50
+            total_flow_tokens = input_tokens + output_tokens
+            
+            costs = calculate_cost(provider, input_tokens, output_tokens)
+            input_cost = costs["input_cost"]
+            output_cost = costs["output_cost"]
+            total_flow_cost = costs["total_cost"]
+        
+        # Add to workflow data
+        workflow_costs.append({
+            "id": flow["id"],
+            "instruction": flow["instruction"],
+            "provider": provider,
+            "created_at": flow["created_at"],
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_flow_tokens,
+            "cost": total_flow_cost
+        })
+        
+        # Aggregate totals
+        total_cost += total_flow_cost
+        total_tokens += total_flow_tokens
+        
+        # By provider
+        if provider not in by_provider:
+            by_provider[provider] = {
+                "workflows": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "input_cost": 0,
+                "output_cost": 0,
+                "cost": 0
+            }
+        
+        by_provider[provider]["workflows"] += 1
+        by_provider[provider]["input_tokens"] += input_tokens
+        by_provider[provider]["output_tokens"] += output_tokens
+        by_provider[provider]["input_cost"] += input_cost
+        by_provider[provider]["output_cost"] += output_cost
+        by_provider[provider]["cost"] += total_flow_cost
+    
+    return {
+        "total_cost": total_cost,
+        "total_tokens": total_tokens,
+        "total_workflows": len(flows),
+        "avg_cost_per_workflow": total_cost / len(flows) if flows else 0,
+        "by_provider": by_provider,
+        "recent_workflows": sorted(workflow_costs, key=lambda x: x["created_at"], reverse=True)[:20],
+        "trend": {
+            "cost": 0,  # Could calculate week-over-week growth
+        }
+    }
 
 # ============================================================================
 # Main

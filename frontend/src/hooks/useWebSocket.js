@@ -25,9 +25,14 @@ export function useWebSocket() {
 
     ws.onmessage = (event) => {
       try {
+        // Handle plain text pong response
+        if (event.data === 'pong') {
+          return;
+        }
+        
         const data = JSON.parse(event.data);
         
-        if (data === 'pong' || data.type === 'keepalive') {
+        if (data.type === 'keepalive') {
           return;
         }
 
