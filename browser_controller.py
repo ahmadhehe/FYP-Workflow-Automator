@@ -24,9 +24,14 @@ class BrowserController:
         self.current_tab_index: int = 0  # Currently active tab
         self.snapshot_cache: Dict[str, Any] = {}
         self._is_persistent_context = False
+        self.navigation_history: List[Dict[str, str]] = []  # Track navigation for smart tab decisions
+        self.tab_purposes: Dict[int, str] = {}  # Track purpose of each tab
+        self._playwright_thread_id = None  # Track which thread owns Playwright context
         
     def start(self):
         """Initialize browser with optional persistent profile"""
+        import threading
+        self._playwright_thread_id = threading.current_thread().ident
         self.playwright = sync_playwright().start()
         
         # Common browser arguments to improve compatibility
@@ -92,8 +97,20 @@ class BrowserController:
         self.current_tab_index = 0
         print(f"✓ Browser started {'with persistent profile' if self.use_profile else '(no profile)'}")
         
+    def _check_thread_safety(self):
+        """Verify we're operating in the same thread that started Playwright"""
+        import threading
+        current_thread_id = threading.current_thread().ident
+        if self._playwright_thread_id and current_thread_id != self._playwright_thread_id:
+            raise RuntimeError(
+                f"Thread safety violation: Playwright was started in thread {self._playwright_thread_id} "
+                f"but is being accessed from thread {current_thread_id}. "
+                "All Playwright operations must run in the same thread."
+            )
+    
     def close(self):
         """Close browser"""
+        self._check_thread_safety()
         if self._is_persistent_context:
             if self.context:
                 self.context.close()
@@ -107,11 +124,24 @@ class BrowserController:
         self.context = None
         self.browser = None
         self._is_persistent_context = False
+        self._playwright_thread_id = None
         print("✓ Browser closed")
         
-    def navigate(self, url: str) -> Dict[str, Any]:
+    def navigate(self, url: str, purpose: str = None) -> Dict[str, Any]:
         """Navigate to URL with smart waiting"""
         try:
+            # Track navigation for autonomous tab management
+            self.navigation_history.append({
+                'url': url,
+                'timestamp': time.time(),
+                'tab_index': self.current_tab_index,
+                'purpose': purpose or 'navigation'
+            })
+            
+            # Update tab purpose if provided
+            if purpose:
+                self.tab_purposes[self.current_tab_index] = purpose
+            
             # Navigate with commit wait - this is more reliable for modern SPAs
             # Use 'commit' instead of 'domcontentloaded' for better reliability
             # Increase timeout for slow-loading sites like Outlook
@@ -533,17 +563,22 @@ class BrowserController:
     
     # ========== TAB MANAGEMENT METHODS ==========
     
-    def open_new_tab(self, url: Optional[str] = None) -> Dict[str, Any]:
+    def open_new_tab(self, url: Optional[str] = None, purpose: str = None) -> Dict[str, Any]:
         """Open a new tab and optionally navigate to URL"""
         try:
             new_page = self.context.new_page()
             self.pages.append(new_page)
             new_tab_index = len(self.pages) - 1
             
+            # Store tab purpose for context
+            if purpose:
+                self.tab_purposes[new_tab_index] = purpose
+            
             result = {
                 'success': True,
                 'tabIndex': new_tab_index,
-                'totalTabs': len(self.pages)
+                'totalTabs': len(self.pages),
+                'purpose': purpose
             }
             
             # Navigate if URL provided
@@ -551,6 +586,14 @@ class BrowserController:
                 new_page.goto(url, wait_until='domcontentloaded', timeout=30000)
                 result['url'] = new_page.url
                 result['title'] = new_page.title()
+                
+                # Track navigation
+                self.navigation_history.append({
+                    'url': url,
+                    'timestamp': time.time(),
+                    'tab_index': new_tab_index,
+                    'purpose': purpose or 'new_tab'
+                })
             
             return result
             
@@ -631,18 +674,50 @@ class BrowserController:
                     'index': i,
                     'url': page.url,
                     'title': page.title(),
-                    'isCurrent': i == self.current_tab_index
+                    'isCurrent': i == self.current_tab_index,
+                    'purpose': self.tab_purposes.get(i, 'unknown')
                 })
             
             return {
                 'success': True,
                 'tabs': tabs,
                 'currentTabIndex': self.current_tab_index,
-                'totalTabs': len(self.pages)
+                'totalTabs': len(self.pages),
+                'tabContextSummary': self._get_tab_context_summary()
             }
             
         except Exception as e:
             return {'success': False, 'error': str(e)}
+    
+    def _get_tab_context_summary(self) -> str:
+        """Generate a summary of current tab context for autonomous decision making"""
+        summary_parts = []
+        
+        # Current tabs overview
+        summary_parts.append(f"Total open tabs: {len(self.pages)}")
+        
+        # Tab purposes
+        if self.tab_purposes:
+            purposes = [f"Tab {i}: {purpose}" for i, purpose in self.tab_purposes.items()]
+            summary_parts.append("Tab purposes: " + ", ".join(purposes))
+        
+        # Recent navigation patterns
+        if len(self.navigation_history) > 0:
+            recent = self.navigation_history[-3:]  # Last 3 navigations
+            domains = []
+            for nav in recent:
+                try:
+                    from urllib.parse import urlparse
+                    domain = urlparse(nav['url']).netloc
+                    domains.append(domain)
+                except:
+                    pass
+            
+            unique_domains = set(domains)
+            if len(unique_domains) > 1:
+                summary_parts.append(f"Working across {len(unique_domains)} domains: {', '.join(unique_domains)}")
+        
+        return " | ".join(summary_parts)
     
     def next_tab(self) -> Dict[str, Any]:
         """Switch to the next tab (circular)"""
@@ -730,7 +805,57 @@ class BrowserController:
                 return {'success': False, 'error': f'Invalid tab index {tab_index}'}
             
             url_to_duplicate = self.pages[tab_index].url
-            return self.open_new_tab(url_to_duplicate)
+            purpose = self.tab_purposes.get(tab_index, 'unknown')
+            return self.open_new_tab(url_to_duplicate, purpose=f"duplicate_{purpose}")
             
         except Exception as e:
             return {'success': False, 'error': str(e)}
+    
+    def get_navigation_context(self) -> Dict[str, Any]:
+        """Get navigation context to help with autonomous tab decisions"""
+        try:
+            current_url = self.page.url
+            current_domain = ''
+            try:
+                from urllib.parse import urlparse
+                current_domain = urlparse(current_url).netloc
+            except:
+                pass
+            
+            # Analyze if we're about to navigate to a different domain
+            recent_domains = []
+            for nav in self.navigation_history[-5:]:
+                try:
+                    from urllib.parse import urlparse
+                    domain = urlparse(nav['url']).netloc
+                    recent_domains.append(domain)
+                except:
+                    pass
+            
+            unique_recent_domains = list(set(recent_domains))
+            
+            return {
+                'success': True,
+                'currentUrl': current_url,
+                'currentDomain': current_domain,
+                'totalTabs': len(self.pages),
+                'currentTabIndex': self.current_tab_index,
+                'recentDomains': unique_recent_domains,
+                'workingAcrossMultipleDomains': len(unique_recent_domains) > 1,
+                'tabPurposes': self.tab_purposes,
+                'recommendation': self._get_tab_recommendation(current_domain, unique_recent_domains)
+            }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _get_tab_recommendation(self, current_domain: str, recent_domains: List[str]) -> str:
+        """Provide recommendation on whether to use a new tab"""
+        # If working across multiple domains, suggest new tabs
+        if len(recent_domains) > 2:
+            return "Consider using new tabs when switching between different domains or tasks"
+        
+        # If only one tab and switching domains
+        if len(self.pages) == 1 and len(recent_domains) > 1:
+            return "Opening a new tab might help organize work across different sites"
+        
+        return "Current tab organization seems appropriate"

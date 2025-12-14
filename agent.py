@@ -20,7 +20,7 @@ class BrowserAgent:
         self.browser = BrowserController(headless=headless, use_profile=use_profile)
         self.llm = LLMClient(provider=provider)
         self.conversation_history: List[Dict[str, Any]] = []
-        self.max_iterations = 15
+        self.max_iterations = 30
         
         # Token tracking for current workflow
         self.total_input_tokens = 0
@@ -121,8 +121,10 @@ class BrowserAgent:
             # Tab Management Tools
             elif tool_name == 'openNewTab':
                 url = arguments.get('url')
-                result = self.browser.open_new_tab(url)
-                print(f"    ✓ Opened new tab (index {result.get('tabIndex')})")
+                purpose = arguments.get('purpose')
+                result = self.browser.open_new_tab(url, purpose)
+                purpose_str = f" for '{purpose}'" if purpose else ""
+                print(f"    ✓ Opened new tab (index {result.get('tabIndex')}){purpose_str}")
                 return result
                 
             elif tool_name == 'switchToTab':
@@ -176,6 +178,11 @@ class BrowserAgent:
                 tab_index = arguments.get('tabIndex')
                 result = self.browser.duplicate_tab(tab_index)
                 print(f"    ✓ Duplicated tab")
+                return result
+            
+            elif tool_name == 'getNavigationContext':
+                result = self.browser.get_navigation_context()
+                print(f"    ✓ Retrieved navigation context")
                 return result
                 
             else:

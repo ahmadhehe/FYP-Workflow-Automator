@@ -18,6 +18,8 @@ import uuid
 import shutil
 import logging
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 load_dotenv()
 
@@ -163,16 +165,15 @@ class FlowUpdate(BaseModel):
     instruction: str
 
 # ============================================================================
-# Global State
+# Global State (WebSocket & Task Management)
 # ============================================================================
 
-agent: Optional[BrowserAgent] = None
+# Task management
 current_task: Optional[Dict[str, Any]] = None
 task_lock = asyncio.Lock()
 websocket_clients: List[WebSocket] = []
 
-# Profile browser state (separate from automation agent)
-profile_browser: Optional[BrowserController] = None
+# Note: agent and profile_browser are defined later with thread pool executor
 
 # ============================================================================
 # WebSocket Management
@@ -255,6 +256,19 @@ class EventEmitter:
         return self.actions
 
 # ============================================================================
+# Global State & Thread Pool
+# ============================================================================
+
+# Global agent instances
+agent: Optional[BrowserAgent] = None
+profile_browser: Optional[BrowserController] = None
+current_task = None
+
+# Dedicated thread pool for Playwright operations (single thread to ensure thread affinity)
+playwright_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playwright")
+playwright_thread_lock = threading.Lock()
+
+# ============================================================================
 # Agent Execution (Async wrapper using thread pool for sync Playwright)
 # ============================================================================
 
@@ -287,12 +301,14 @@ async def run_agent_task(
     try:
         if not agent:
             await emitter.emit("status", {"message": "Starting browser...", "status": "initializing"})
-            # Run sync Playwright code in thread pool
-            agent = await asyncio.to_thread(_create_and_start_agent, provider, False)
+            # Run sync Playwright code in dedicated single-threaded executor
+            loop = asyncio.get_event_loop()
+            agent = await loop.run_in_executor(playwright_executor, _create_and_start_agent, provider, False, True)
         elif agent.provider != provider:
             # Provider changed, update the LLM client
             await emitter.emit("status", {"message": f"Switching to {provider}...", "status": "initializing"})
-            await asyncio.to_thread(agent.set_provider, provider)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(playwright_executor, agent.set_provider, provider)
         
         await emitter.emit("status", {"message": "Task started", "status": "running"})
         
@@ -390,8 +406,9 @@ async def run_agent_with_events(
             "url": initial_url,
             "iteration": 0
         })
-        # Run sync navigate in thread pool
-        await asyncio.to_thread(agent.browser.navigate, initial_url)
+        # Run sync navigate in dedicated Playwright executor
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(playwright_executor, agent.browser.navigate, initial_url)
     
     agent.conversation_history = [
         {'role': 'system', 'content': agent.llm.get_system_prompt()},
@@ -416,7 +433,7 @@ async def run_agent_with_events(
                 "iteration": iteration + 1
             })
             
-            # LLM calls are I/O bound, run in thread pool
+            # LLM calls are I/O bound, run in thread pool (not in Playwright executor)
             response = await asyncio.to_thread(
                 agent.llm.chat_completion,
                 agent.conversation_history,
@@ -494,7 +511,9 @@ async def run_agent_with_events(
                 # Run sync tool execution in thread pool
                 try:
                     print(f"[Server] Executing tool: {function_name} with args: {arguments}")
-                    result = await asyncio.to_thread(agent.execute_tool, function_name, arguments)
+                    # Execute tool in dedicated Playwright executor to maintain thread affinity
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(playwright_executor, agent.execute_tool, function_name, arguments)
                     print(f"[Server] Tool result: {result}")
                 except Exception as tool_error:
                     print(f"[Server] Tool error: {tool_error}")
@@ -553,8 +572,9 @@ async def start_browser(provider: str = "openai", headless: bool = False):
         if agent:
             return {"status": "already_running", "message": "Browser is already running"}
         
-        # Run sync Playwright code in thread pool
-        agent = await asyncio.to_thread(_create_and_start_agent, provider, headless)
+        # Run sync Playwright code in dedicated single-threaded executor
+        loop = asyncio.get_event_loop()
+        agent = await loop.run_in_executor(playwright_executor, _create_and_start_agent, provider, headless, True)
         
         await broadcast_event({
             "type": "browser_started",
@@ -636,12 +656,14 @@ async def start_profile_browser(url: str = None):
                 "message": "Profile browser is already running. Use it to set up your credentials."
             }
         
-        # Start profile browser in thread pool
-        profile_browser = await asyncio.to_thread(_start_profile_browser)
+        # Start profile browser in dedicated Playwright executor
+        loop = asyncio.get_event_loop()
+        profile_browser = await loop.run_in_executor(playwright_executor, _start_profile_browser)
         
         # Navigate to URL if provided
         if url:
-            await asyncio.to_thread(profile_browser.navigate, url)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(playwright_executor, profile_browser.navigate, url)
         
         await broadcast_event({
             "type": "profile_browser_started",
@@ -668,8 +690,9 @@ async def stop_profile_browser():
         if not profile_browser:
             return {"status": "not_running", "message": "Profile browser is not running"}
         
-        # Close profile browser
-        await asyncio.to_thread(_close_profile_browser, profile_browser)
+        # Close profile browser in dedicated Playwright executor
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(playwright_executor, _close_profile_browser, profile_browser)
         profile_browser = None
         
         await broadcast_event({

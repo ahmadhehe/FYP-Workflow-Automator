@@ -57,16 +57,24 @@ You have access to these tools:
 
 9. **sendKeys(key)** - Send special keys like "Enter", "Tab", "Escape"
 
-**Tab Management:**
-10. **openNewTab(url?)** - Open a new tab, optionally with a URL
+**Tab Management (AUTONOMOUS):**
+You should intelligently decide when to open new tabs without explicit user instructions. Open new tabs when:
+- Navigating to a different domain/website while needing to preserve the current page
+- Working on parallel tasks (e.g., comparing information, filling forms from different sources)
+- Downloading files while continuing other work
+- Opening links that should be kept separate from current workflow
+- Switching between different accounts or contexts on the same site
+
+10. **openNewTab(url?, purpose?)** - Open a new tab, optionally with URL and purpose description
 11. **switchToTab(tabIndex)** - Switch to a specific tab by index
 12. **closeTab(tabIndex?)** - Close a tab (current tab if no index specified)
-13. **listTabs()** - List all open tabs with URLs and titles
-14. **nextTab()** / **previousTab()** - Navigate between tabs
-15. **goBack()** / **goForward()** - Navigate browser history
-16. **reloadTab(tabIndex?)** - Refresh a tab
-17. **closeOtherTabs()** - Close all tabs except current
-18. **duplicateTab(tabIndex?)** - Duplicate a tab
+13. **listTabs()** - List all open tabs with URLs, titles, and purposes
+14. **getNavigationContext()** - Get context about current navigation to help decide if new tab needed
+15. **nextTab()** / **previousTab()** - Navigate between tabs
+16. **goBack()** / **goForward()** - Navigate browser history
+17. **reloadTab(tabIndex?)** - Refresh a tab
+18. **closeOtherTabs()** - Close all tabs except current
+19. **duplicateTab(tabIndex?)** - Duplicate a tab
 
 **Guidelines:**
 - Always call getInteractiveSnapshot() FIRST to see what's on the page
@@ -76,8 +84,17 @@ You have access to these tools:
 - If something fails, try alternative approaches
 - Use getPageContent() to verify results
 - When searching or submitting forms, use sendKeys("Enter") after typing
-- Use tab management to work with multiple pages simultaneously
-- Call listTabs() to see all open tabs and their indices
+
+**AUTONOMOUS TAB MANAGEMENT - IMPORTANT:**
+- You can and SHOULD open new tabs proactively when it makes sense
+- Call getNavigationContext() when considering whether to navigate away from current page
+- Open new tabs BEFORE navigating to preserve context (e.g., "openNewTab(url, purpose='download assignment')")
+- Use tab purposes to organize your work (e.g., purpose='login', 'search_results', 'download_page')
+- Think: "Will I need this page again?" → If yes, open in new tab
+- Think: "Am I switching to a different task?" → If yes, consider new tab
+- When working across multiple sites, use separate tabs for better organization
+- Call listTabs() periodically to track your open tabs
+- Close tabs when you're done with them to stay organized
 
 **Example workflow:**
 1. Call getInteractiveSnapshot() to see the page
@@ -86,11 +103,24 @@ You have access to these tools:
 4. Verify the action succeeded
 5. Continue to next step
 
-**Multi-tab workflow:**
-1. openNewTab(url) to open additional pages
-2. listTabs() to see all open tabs
-3. switchToTab(index) to switch between tabs
-4. Perform actions on each tab as needed
+**Multi-tab workflow examples:**
+Example 1 - Preserving context:
+1. On page A, need to go to page B but will return to A
+2. openNewTab(url_B, purpose='temporary_task') - DON'T navigate current tab away
+3. Work in new tab
+4. switchToTab(0) to return to original context
+
+Example 2 - Parallel tasks:
+1. Working on task requiring info from multiple sources
+2. openNewTab(source1, purpose='reference_data')
+3. openNewTab(source2, purpose='form_to_fill')
+4. switchToTab() between them as needed
+5. Close tabs when done
+
+Example 3 - Downloads:
+1. On a page with download link
+2. openNewTab(download_url, purpose='download') - keep original page accessible
+3. switchToTab(0) to continue work while download proceeds
 
 Think step by step and be precise with element selection."""
 
@@ -596,13 +626,17 @@ Think step by step and be precise with element selection."""
                 'type': 'function',
                 'function': {
                     'name': 'openNewTab',
-                    'description': 'Open a new browser tab, optionally navigating to a URL',
+                    'description': 'Open a new browser tab, optionally navigating to a URL. Use this autonomously when: switching domains while preserving current page, working on parallel tasks, opening downloads, or organizing multi-step workflows.',
                     'parameters': {
                         'type': 'object',
                         'properties': {
                             'url': {
                                 'type': 'string',
                                 'description': 'Optional URL to navigate to in the new tab'
+                            },
+                            'purpose': {
+                                'type': 'string',
+                                'description': 'Purpose/description of this tab (e.g., "login", "download_assignment", "search_results") - helps with organization and context tracking'
                             }
                         }
                     }
@@ -645,7 +679,15 @@ Think step by step and be precise with element selection."""
                 'type': 'function',
                 'function': {
                     'name': 'listTabs',
-                    'description': 'List all open tabs with their URLs and titles',
+                    'description': 'List all open tabs with their URLs, titles, purposes, and context summary. Use this to track your tab organization.',
+                    'parameters': {'type': 'object', 'properties': {}}
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'getNavigationContext',
+                    'description': 'Get context about current navigation state to help decide if opening a new tab would be beneficial. Returns info about current domain, recent navigation patterns, and recommendations.',
                     'parameters': {'type': 'object', 'properties': {}}
                 }
             },
