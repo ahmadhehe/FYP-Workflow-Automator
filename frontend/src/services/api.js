@@ -42,15 +42,42 @@ class ApiService {
   }
 
   // Task execution
-  async runTask(instruction, initialUrl = null, provider = null) {
+  async runTask(instruction, initialUrl = null, provider = null, fileContent = null, fileName = null) {
     return this.request('/task', {
       method: 'POST',
       body: JSON.stringify({
         instruction,
         initial_url: initialUrl,
         provider,
+        file_content: fileContent,
+        file_name: fileName
       }),
     });
+  }
+
+  // File upload
+  async uploadFile(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const url = `${API_BASE}/upload-file`;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        body: formData,
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.detail || 'File upload failed');
+      }
+      
+      return data;
+    } catch (error) {
+      console.error('File Upload Error:', error);
+      throw error;
+    }
   }
 
   // Flow history

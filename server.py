@@ -1,7 +1,7 @@
 """
 FastAPI Server - REST API + WebSocket for browser automation agent
 """
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -20,6 +20,11 @@ import logging
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import io
+try:
+    from PyPDF2 import PdfReader
+except ImportError:
+    PdfReader = None
 
 load_dotenv()
 
@@ -154,6 +159,8 @@ class TaskRequest(BaseModel):
     initial_url: Optional[str] = None
     provider: Optional[str] = None
     flow_id: Optional[str] = None
+    file_content: Optional[str] = None
+    file_name: Optional[str] = None
 
 class TaskResponse(BaseModel):
     success: bool
@@ -280,16 +287,18 @@ def _create_and_start_agent(provider: str, headless: bool, use_profile: bool = T
     print(f"[Server] Agent started successfully")
     return agent
 
-def _run_agent_sync(agent: BrowserAgent, instruction: str, initial_url: Optional[str]) -> str:
+def _run_agent_sync(agent: BrowserAgent, instruction: str, initial_url: Optional[str], file_context: Optional[str] = None) -> str:
     """Synchronous function to run the agent (runs in thread pool)"""
-    return agent.run(user_instruction=instruction, initial_url=initial_url)
+    return agent.run(user_instruction=instruction, initial_url=initial_url, file_context=file_context)
 
 async def run_agent_task(
     instruction: str,
     initial_url: Optional[str],
     provider: str,
     flow_id: str,
-    emitter: EventEmitter
+    emitter: EventEmitter,
+    file_context: Optional[str] = None,
+    file_name: Optional[str] = None
 ):
     """Run agent task with event emission"""
     global agent, current_task
@@ -316,10 +325,15 @@ async def run_agent_task(
         llm_logger = setup_llm_logger(flow_id)
         llm_logger.info(f"Starting workflow: {instruction}")
         llm_logger.info(f"Provider: {provider}")
-        llm_logger.info(f"Initial URL: {initial_url}\n")
+        llm_logger.info(f"Initial URL: {initial_url}")
+        if file_context:
+            llm_logger.info(f"File attached: {file_name}")
+            llm_logger.info(f"File content length: {len(file_context)} characters\n")
+        else:
+            llm_logger.info("")
         
         # Run the agent in a thread pool to avoid blocking the event loop
-        result = await run_agent_with_events(agent, instruction, initial_url, emitter, llm_logger)
+        result = await run_agent_with_events(agent, instruction, initial_url, emitter, llm_logger, file_context, file_name)
         
         await emitter.emit("status", {"message": "Task completed", "status": "completed"})
         
@@ -388,7 +402,9 @@ async def run_agent_with_events(
     instruction: str,
     initial_url: Optional[str],
     emitter: EventEmitter,
-    llm_logger: logging.Logger = None
+    llm_logger: logging.Logger = None,
+    file_context: Optional[str] = None,
+    file_name: Optional[str] = None
 ) -> str:
     """Run agent with event emission for each action"""
     import json as json_module
@@ -410,9 +426,20 @@ async def run_agent_with_events(
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(playwright_executor, agent.browser.navigate, initial_url)
     
+    # Build user message with optional file context
+    user_message = instruction
+    if file_context:
+        user_message = f"{instruction}\\n\\n[File Context Provided by User ({file_name})]:\\n{file_context}"
+        await emitter.emit("action", {
+            "type": "file_attached",
+            "message": f"File attached: {file_name}",
+            "file_name": file_name,
+            "iteration": 0
+        })
+    
     agent.conversation_history = [
         {'role': 'system', 'content': agent.llm.get_system_prompt()},
-        {'role': 'user', 'content': instruction}
+        {'role': 'user', 'content': user_message}
     ]
     
     # Reset token tracking for this workflow
@@ -764,6 +791,79 @@ async def clear_profile():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/upload-file")
+async def upload_file(file: UploadFile = File(...)):
+    """Upload and parse a file (supports PDF and text files)"""
+    try:
+        content = await file.read()
+        file_content = ""
+        
+        # Check if it's a PDF
+        if file.filename.lower().endswith('.pdf'):
+            if PdfReader is None:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="PDF support not installed. Run: pip install PyPDF2"
+                )
+            
+            try:
+                # Parse PDF
+                pdf_file = io.BytesIO(content)
+                pdf_reader = PdfReader(pdf_file)
+                
+                # Extract text from all pages
+                text_parts = []
+                for page_num, page in enumerate(pdf_reader.pages):
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_parts.append(f"--- Page {page_num + 1} ---\n{page_text}")
+                
+                file_content = "\n\n".join(text_parts)
+                
+                if not file_content.strip():
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Could not extract text from PDF. It may be scanned or image-based."
+                    )
+                    
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Error parsing PDF: {str(e)}"
+                )
+        else:
+            # Try to decode as text
+            try:
+                file_content = content.decode('utf-8')
+            except UnicodeDecodeError:
+                try:
+                    file_content = content.decode('latin-1')
+                except:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Could not decode file. Please ensure it's a text-based file."
+                    )
+        
+        # Truncate if too long (max 50k characters)
+        MAX_CHARS = 50000
+        if len(file_content) > MAX_CHARS:
+            file_content = file_content[:MAX_CHARS] + '\n\n[... Content truncated due to length ...]'
+        
+        return {
+            "success": True,
+            "file_name": file.filename,
+            "file_content": file_content,
+            "content_length": len(file_content),
+            "is_pdf": file.filename.lower().endswith('.pdf')
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/task", response_model=TaskResponse)
 async def run_task(request: TaskRequest, background_tasks: BackgroundTasks):
     """Run a task with the agent"""
@@ -793,7 +893,9 @@ async def run_task(request: TaskRequest, background_tasks: BackgroundTasks):
         initial_url=request.initial_url,
         provider=provider,
         flow_id=flow_id,
-        emitter=emitter
+        emitter=emitter,
+        file_context=request.file_content,
+        file_name=request.file_name
     )
     
     return TaskResponse(

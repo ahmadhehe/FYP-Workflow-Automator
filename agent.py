@@ -195,13 +195,14 @@ class BrowserAgent:
             print(f"    ✗ Error: {error}")
             return {'error': error}
     
-    def run(self, user_instruction: str, initial_url: str = None) -> str:
+    def run(self, user_instruction: str, initial_url: str = None, file_context: str = None) -> str:
         """
         Run the agent with a user instruction
         
         Args:
             user_instruction: What the user wants to accomplish
             initial_url: Optional starting URL
+            file_context: Optional file content to provide as context
             
         Returns:
             Final response from the agent
@@ -215,10 +216,16 @@ class BrowserAgent:
             print(f"🌐 Navigating to {initial_url}")
             self.browser.navigate(initial_url)
         
+        # Build user message with optional file context
+        user_message = user_instruction
+        if file_context:
+            user_message = f"{user_instruction}\n\n[File Context Provided by User:]\n{file_context}"
+            print(f"📄 File context included in prompt")
+        
         # Initialize conversation with system prompt and user message
         self.conversation_history = [
             {'role': 'system', 'content': self.llm.get_system_prompt()},
-            {'role': 'user', 'content': user_instruction}
+            {'role': 'user', 'content': user_message}
         ]
         
         tools = self.llm.get_tools_definition()
