@@ -145,6 +145,22 @@
   transition: all 300ms ease-out;
 }
 
+/* Fade-in animation for new actions */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out;
+}
+
 /* Pulse animation for running status */
 @keyframes status-pulse {
   0%, 100% {

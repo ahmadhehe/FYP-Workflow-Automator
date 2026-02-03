@@ -20,7 +20,7 @@ class BrowserAgent:
         self.browser = BrowserController(headless=headless, use_profile=use_profile)
         self.llm = LLMClient(provider=provider)
         self.conversation_history: List[Dict[str, Any]] = []
-        self.max_iterations = 30
+        self.max_iterations = 45
         
         # Token tracking for current workflow
         self.total_input_tokens = 0
@@ -73,13 +73,47 @@ class BrowserAgent:
                 return result
                 
             elif tool_name == 'click':
-                result = self.browser.click(arguments['nodeId'])
+                node_id = int(arguments['nodeId'])  # Convert float to int
+                result = self.browser.click(node_id)
                 print(f"    ✓ Click {'succeeded' if result.get('success') else 'failed'}")
+                return result
+            
+            elif tool_name == 'clickByText':
+                element_type = arguments.get('elementType', 'any')
+                result = self.browser.click_by_text(arguments['text'], element_type)
+                print(f"    ✓ Click by text '{arguments['text']}' {'succeeded' if result.get('success') else 'failed'}")
+                return result
+            
+            elif tool_name == 'checkFormErrors':
+                result = self.browser.check_for_form_errors()
+                if result.get('hasErrors'):
+                    print(f"    ⚠️  Form errors found: {result.get('errors', [])}")
+                else:
+                    print(f"    ✓ No form errors detected")
                 return result
                 
             elif tool_name == 'inputText':
-                result = self.browser.input_text(arguments['nodeId'], arguments['text'])
+                node_id = int(arguments['nodeId'])  # Convert float to int
+                result = self.browser.input_text(node_id, arguments['text'])
                 print(f"    ✓ Input text {'succeeded' if result.get('success') else 'failed'}")
+                return result
+            
+            elif tool_name == 'selectDate':
+                node_id = int(arguments['nodeId'])  # Convert float to int
+                result = self.browser.select_date(node_id, arguments['date'])
+                print(f"    ✓ Date selection {'succeeded' if result.get('success') else 'failed'}")
+                return result
+            
+            elif tool_name == 'getElementState':
+                node_id = int(arguments['nodeId'])  # Convert float to int
+                result = self.browser.get_element_state(node_id)
+                print(f"    ✓ Got element state")
+                return result
+            
+            elif tool_name == 'selectDropdownOption':
+                node_id = int(arguments['nodeId'])  # Convert float to int
+                result = self.browser.select_dropdown_option(node_id, arguments['optionText'])
+                print(f"    ✓ Dropdown selection {'succeeded' if result.get('success') else 'failed'}")
                 return result
                 
             elif tool_name == 'navigate':
@@ -128,12 +162,15 @@ class BrowserAgent:
                 return result
                 
             elif tool_name == 'switchToTab':
-                result = self.browser.switch_to_tab(arguments['tabIndex'])
-                print(f"    ✓ Switched to tab {arguments['tabIndex']}")
+                tab_idx = int(arguments['tabIndex'])  # Convert float to int
+                result = self.browser.switch_to_tab(tab_idx)
+                print(f"    ✓ Switched to tab {tab_idx}")
                 return result
                 
             elif tool_name == 'closeTab':
                 tab_index = arguments.get('tabIndex')
+                if tab_index is not None:
+                    tab_index = int(tab_index)  # Convert float to int
                 result = self.browser.close_tab(tab_index)
                 print(f"    ✓ Closed tab")
                 return result
@@ -230,6 +267,9 @@ class BrowserAgent:
         
         tools = self.llm.get_tools_definition()
         
+        # Loop detection: track recent tool calls
+        recent_tools = []
+        
         for iteration in range(self.max_iterations):
             print(f"\n--- Iteration {iteration + 1}/{self.max_iterations} ---")
             
@@ -280,6 +320,28 @@ class BrowserAgent:
                         arguments = json.loads(tool_call.function.arguments)
                     except json.JSONDecodeError:
                         arguments = {}
+                    
+                    # Loop detection: check if calling same tool repeatedly
+                    recent_tools.append(function_name)
+                    if len(recent_tools) > 5:
+                        recent_tools.pop(0)
+                    
+                    # If same tool called 3+ times in a row, inject a hint
+                    if len(recent_tools) >= 3 and len(set(recent_tools[-3:])) == 1:
+                        repeated_tool = recent_tools[-1]
+                        print(f"    ⚠️  Loop detected: {repeated_tool} called 3 times in a row")
+                        
+                        # Add a hint message to break the loop
+                        hint = f"LOOP DETECTED: You called {repeated_tool} multiple times without taking action. "
+                        if repeated_tool == 'getInteractiveSnapshot':
+                            hint += "STOP getting snapshots! Look at the form fields in the snapshot you already have and use inputText(nodeId, text) to fill them, or use click(nodeId) to click checkboxes/radios, or use clickByText('Next') if you see a Next button. DO NOT call getInteractiveSnapshot again!"
+                        else:
+                            hint += "Try a DIFFERENT approach or tool."
+                        
+                        self.conversation_history.append({
+                            'role': 'user',
+                            'content': hint
+                        })
                     
                     # Execute tool
                     result = self.execute_tool(function_name, arguments)

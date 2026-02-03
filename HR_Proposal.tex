@@ -1,0 +1,179 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+% Color definitions
+\definecolor{ibamaroon}{RGB}{128,0,32}
+
+% Header and footer
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\cfoot{\thepage}
+
+% Title formatting
+\titleformat{\section}{\large\bfseries\color{ibamaroon}}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{1em}{}
+
+\begin{document}
+
+% Title
+\begin{center}
+{\LARGE\bfseries\color{ibamaroon} AI-Powered HR Onboarding Automation}\\[0.3cm]
+{\large Project Proposal for IBA Human Resources}\\[0.2cm]
+\rule{0.8\textwidth}{1pt}\\[0.3cm]
+{\normalsize\textbf{Submitted by:} Ahmad Murtaza, Fizza Zehra, Fatima Jawaid}\\
+{\normalsize\textbf{Advisor:} Ms. Abeera Tariq, Department of Computer Science}\\
+{\normalsize\textbf{Date:} \today}
+\end{center}
+
+\vspace{0.5cm}
+
+\section{Executive Summary}
+
+We propose to develop and deploy an AI-powered browser automation system to streamline and automate manual HR onboarding processes at IBA. Our system leverages Large Language Models (LLMs) to understand natural language instructions and autonomously navigate enterprise systems, significantly reducing manual data entry, processing time, and human error.
+
+This pilot project focuses on automating repetitive onboarding workflows across HR systems, with potential for expansion to other administrative functions.
+
+\section{Problem Statement}
+
+Current employee onboarding involves significant manual effort across multiple systems:
+\begin{itemize}[noitemsep,topsep=3pt]
+    \item Manual data entry across Dynamics 365, UMS, LMS, and Oracle
+    \item Repetitive tasks prone to human error and delays
+    \item Time-intensive processes that could be allocated to higher-value work
+    \item Inconsistent workflows when handled by different personnel
+\end{itemize}
+
+\section{Proposed Solution}
+
+Our AI browser automation agent will:
+\begin{enumerate}[noitemsep,topsep=3pt]
+    \item Accept natural language instructions for onboarding tasks
+    \item Automatically navigate and interact with HR systems (Dynamics 365, UMS, LMS, Oracle)
+    \item Perform data entry, form filling, and cross-system synchronization
+    \item Validate data integrity across platforms
+    \item Generate completion reports and audit logs
+\end{enumerate}
+
+\subsection{Primary Scope: HR Onboarding Automation}
+\begin{itemize}[noitemsep,topsep=3pt]
+    \item New employee account creation across systems
+    \item Document processing and data extraction
+    \item System access provisioning
+    \item Automated workflow triggers and notifications
+\end{itemize}
+
+\subsection{Future Considerations}
+Based on our recent discussions, the following features may be explored in subsequent phases:
+\begin{itemize}[noitemsep,topsep=3pt]
+    \item CV validation with applicant email confirmation
+    \item Automated CV shortlisting based on defined criteria
+    \item Virtual campus tour for new employees/faculty
+    \item Query chatbot for new facility assistance
+    \item Searchable CV database with filtering capabilities
+\end{itemize}
+
+\section{Resource Requirements}
+
+\subsection{System Access Required}
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{System} & \textbf{Purpose} \\
+\midrule
+Dynamics 365 & HR management and employee records \\
+UMS & University management system integration \\
+LMS & Learning management system provisioning \\
+Oracle & Enterprise resource planning and payroll \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Testing Environment}
+\begin{itemize}[noitemsep,topsep=3pt]
+    \item \textbf{Demo accounts} for each system (non-production credentials)
+    \item \textbf{Demo/sandbox environment} to safely test automation workflows without affecting live data
+\end{itemize}
+
+\subsection{Funding Request}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Item} & \textbf{Monthly Cost (USD)} & \textbf{Monthly Cost (PKR)} \\
+\midrule
+LLM API Costs (OpenAI/Anthropic) & \$30 & Rs. 9,000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Note:} Costs could be \textbf{significantly reduced} if direct API access to HR systems is provided, eliminating the need for browser-based automation and enabling faster, more reliable integration.
+
+\section{Benefits to IBA HR}
+
+\begin{itemize}[noitemsep,topsep=3pt]
+    \item \textbf{Time Savings:} Estimated 60-80\% reduction in manual onboarding time
+    \item \textbf{Error Reduction:} Consistent, validated data entry across systems
+    \item \textbf{Scalability:} Handle increased onboarding volume without additional staff
+    \item \textbf{Audit Trail:} Complete logging of all automated actions
+    \item \textbf{Staff Reallocation:} Free HR personnel for strategic, high-value tasks
+\end{itemize}
+
+\section{Project Timeline}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Phase} & \textbf{Duration} & \textbf{Deliverables} \\
+\midrule
+System Analysis & 2 weeks & Workflow documentation, integration requirements \\
+Development & 4-6 weeks & Automation scripts for core onboarding tasks \\
+Testing & 2 weeks & UAT in sandbox environment \\
+Pilot Deployment & 2 weeks & Limited rollout with HR supervision \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Data Security \& Compliance}
+
+\begin{itemize}[noitemsep,topsep=3pt]
+    \item All testing conducted in isolated sandbox environments
+    \item No production data accessed without explicit authorization
+    \item Compliance with IBA data handling policies and NDA requirements
+    \item All credentials stored securely and never logged
+    \item Audit logs maintained for all automated actions
+\end{itemize}
+
+\section{Next Steps}
+
+Upon approval, we request:
+\begin{enumerate}[noitemsep,topsep=3pt]
+    \item Meeting to finalize scope and priority workflows
+    \item Provisioning of demo accounts and sandbox access
+    \item NDA signing as required
+    \item Designation of HR point-of-contact for requirements gathering
+\end{enumerate}
+
+\vspace{0.5cm}
+\noindent\rule{\textwidth}{0.5pt}
+\begin{center}
+\small
+\textit{For questions or clarifications, please contact us at:\\
+ahmad.murtaza@khi.iba.edu.pk}
+\end{center}
+
+\end{document}

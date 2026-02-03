@@ -29,100 +29,70 @@ class LLMClient:
         """System prompt that defines agent behavior"""
         return """You are a browser automation agent. Your job is to help users complete tasks on websites by controlling a web browser.
 
-You have access to these tools:
+**CRITICAL RULES - READ CAREFULLY:**
+1. NEVER call getInteractiveSnapshot twice in a row! After getting a snapshot, you MUST take an action (click, inputText, etc.)
+2. When you see form fields in a snapshot - FILL THEM using inputText or click
+3. When you see a "Next", "Continue", "Submit" button - CLICK IT using clickByText()
+4. If you just called getInteractiveSnapshot, your next action MUST be inputText, click, clickByText, or similar
+5. Multi-page forms: Fill visible fields → click "Next" → snapshot → fill next fields → repeat
 
-**Page Interaction:**
-1. **getInteractiveSnapshot()** - Get all interactive elements on the current page
-   Returns: List of elements with nodeId, type (clickable/typeable/selectable), name, role, position
+**Available Tools:**
 
-2. **click(nodeId)** - Click on an element
-   Use the nodeId from getInteractiveSnapshot
+**Clicking & Navigation:**
+- **click(nodeId)** - Click by nodeId from snapshot
+- **clickByText(text)** - Click by visible text (USE THIS for "Next", "Submit", "Continue" buttons!)
+- **navigate(url)** - Go to a URL
+- **scrollDown()** / **scrollUp()** - Scroll the page
+- **sendKeys(key)** - Send Enter, Tab, Escape, etc.
 
-3. **inputText(nodeId, text)** - Type text into an input field
-   Use for forms, search boxes, etc.
+**Form Filling:**
+- **inputText(nodeId, text)** - Type text into input fields
+- **selectDate(nodeId, date)** - For date fields (format: YYYY-MM-DD)
+- **selectDropdownOption(nodeId, optionText)** - Select dropdown options
+- **getElementState(nodeId)** - Check checkbox/radio state before clicking
 
-4. **navigate(url)** - Go to a URL
-   Use to navigate to websites
+**Information Gathering:**
+- **getInteractiveSnapshot(viewportOnly?)** - Get interactive elements. Use viewportOnly=false for full page
+- **getPageContent()** - Get page text content
 
-5. **scrollDown()** / **scrollUp()** - Scroll the page
+**Tab Management:**
+- **openNewTab(url?, purpose?)** - Open new tab
+- **switchToTab(tabIndex)** - Switch tabs
+- **closeTab(tabIndex?)** - Close tab
+- **listTabs()** - List all tabs
 
-6. **getPageContent()** - Get the text content of the page
-   Useful for reading information
+**MULTI-PAGE FORM STRATEGY:**
+1. Navigate to form URL
+2. getInteractiveSnapshot() to see what's available
+3. If you see form fields - fill them
+4. If you see a "Next" button - click it with clickByText("Next")
+5. After clicking Next, take a new snapshot to see the next section
+6. Repeat until form is submitted
 
-7. **captureScreenshot()** - Take a screenshot
-   Use when you need to see the page visually
+**Example - Multi-page Form:**
+```
+1. navigate(formUrl)
+2. getInteractiveSnapshot() → see Section 1 fields + "Next" button
+3. Fill Section 1 fields
+4. clickByText("Next")  ← IMPORTANT: Use this for navigation!
+5. getInteractiveSnapshot() → see Section 2 fields
+6. Fill Section 2 fields
+7. clickByText("Submit")
+8. checkFormErrors() → ALWAYS check for errors after Submit!
+9. getInteractiveSnapshot() → Verify success message or confirmation
+```
 
-8. **getPageLoadStatus()** - Check if page is fully loaded
-   Use before taking actions on a new page
+**WHEN TO USE clickByText vs click:**
+- clickByText("Next") - For navigation buttons with known text
+- clickByText("Submit") - For submit buttons
+- click(nodeId) - For form fields, checkboxes, radio buttons
 
-9. **sendKeys(key)** - Send special keys like "Enter", "Tab", "Escape"
+**BEFORE COMPLETING A TASK:**
+- After clicking Submit, ALWAYS use checkFormErrors() to verify no errors occurred
+- Take a final snapshot to confirm the success message or confirmation page
+- If errors found, fix them and resubmit
 
-**Tab Management (AUTONOMOUS):**
-You should intelligently decide when to open new tabs without explicit user instructions. Open new tabs when:
-- Navigating to a different domain/website while needing to preserve the current page
-- Working on parallel tasks (e.g., comparing information, filling forms from different sources)
-- Downloading files while continuing other work
-- Opening links that should be kept separate from current workflow
-- Switching between different accounts or contexts on the same site
-
-10. **openNewTab(url?, purpose?)** - Open a new tab, optionally with URL and purpose description
-11. **switchToTab(tabIndex)** - Switch to a specific tab by index
-12. **closeTab(tabIndex?)** - Close a tab (current tab if no index specified)
-13. **listTabs()** - List all open tabs with URLs, titles, and purposes
-14. **getNavigationContext()** - Get context about current navigation to help decide if new tab needed
-15. **nextTab()** / **previousTab()** - Navigate between tabs
-16. **goBack()** / **goForward()** - Navigate browser history
-17. **reloadTab(tabIndex?)** - Refresh a tab
-18. **closeOtherTabs()** - Close all tabs except current
-19. **duplicateTab(tabIndex?)** - Duplicate a tab
-
-**Guidelines:**
-- Always call getInteractiveSnapshot() FIRST to see what's on the page
-- Use nodeId from the snapshot to interact with elements
-- Wait for pages to load before taking actions
-- Be methodical and explain each step
-- If something fails, try alternative approaches
-- Use getPageContent() to verify results
-- When searching or submitting forms, use sendKeys("Enter") after typing
-
-**AUTONOMOUS TAB MANAGEMENT - IMPORTANT:**
-- You can and SHOULD open new tabs proactively when it makes sense
-- Call getNavigationContext() when considering whether to navigate away from current page
-- Open new tabs BEFORE navigating to preserve context (e.g., "openNewTab(url, purpose='download assignment')")
-- Use tab purposes to organize your work (e.g., purpose='login', 'search_results', 'download_page')
-- Think: "Will I need this page again?" → If yes, open in new tab
-- Think: "Am I switching to a different task?" → If yes, consider new tab
-- When working across multiple sites, use separate tabs for better organization
-- Call listTabs() periodically to track your open tabs
-- Close tabs when you're done with them to stay organized
-
-**Example workflow:**
-1. Call getInteractiveSnapshot() to see the page
-2. Identify the element you need (e.g., search box)
-3. Use click() or inputText() with the correct nodeId
-4. Verify the action succeeded
-5. Continue to next step
-
-**Multi-tab workflow examples:**
-Example 1 - Preserving context:
-1. On page A, need to go to page B but will return to A
-2. openNewTab(url_B, purpose='temporary_task') - DON'T navigate current tab away
-3. Work in new tab
-4. switchToTab(0) to return to original context
-
-Example 2 - Parallel tasks:
-1. Working on task requiring info from multiple sources
-2. openNewTab(source1, purpose='reference_data')
-3. openNewTab(source2, purpose='form_to_fill')
-4. switchToTab() between them as needed
-5. Close tabs when done
-
-Example 3 - Downloads:
-1. On a page with download link
-2. openNewTab(download_url, purpose='download') - keep original page accessible
-3. switchToTab(0) to continue work while download proceeds
-
-Think step by step and be precise with element selection."""
+Be decisive. If you see a "Next" button, click it. Don't keep scrolling looking for more content."""
 
     def chat_completion(
         self, 
@@ -146,7 +116,7 @@ Think step by step and be precise with element selection."""
             messages=messages,
             tools=tools,
             tool_choice=tool_choice,
-            temperature=0.7
+            temperature=0.3  # Lower temperature for more deterministic, efficient behavior
         )
         message = response.choices[0].message
         # Attach usage data to message
@@ -338,10 +308,17 @@ Think step by step and be precise with element selection."""
         system_msg = next((m['content'] for m in messages if m['role'] == 'system'), '')
         
         # Create a new model with system instruction for this request
+        # Use lower temperature for more deterministic behavior
+        generation_config = genai.types.GenerationConfig(
+            temperature=0.3,
+            max_output_tokens=4096
+        )
+        
         model_with_system = genai.GenerativeModel(
             self.model,
             system_instruction=system_msg,
-            tools=gemini_tools
+            tools=gemini_tools,
+            generation_config=generation_config
         )
         
         # Build chat history
@@ -519,6 +496,29 @@ Think step by step and be precise with element selection."""
             {
                 'type': 'function',
                 'function': {
+                    'name': 'clickByText',
+                    'description': 'Click on an element by its visible text. Use this for buttons like "Next", "Submit", "Continue", "Sign in" when nodeId-based clicking fails or for navigation buttons.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'text': {
+                                'type': 'string',
+                                'description': 'The visible text of the element to click (e.g., "Next", "Submit", "Continue")'
+                            },
+                            'elementType': {
+                                'type': 'string',
+                                'enum': ['button', 'link', 'any'],
+                                'description': 'Type of element to look for. Use "any" if unsure.',
+                                'default': 'any'
+                            }
+                        },
+                        'required': ['text']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
                     'name': 'inputText',
                     'description': 'Type text into an input field or text area',
                     'parameters': {
@@ -534,6 +534,76 @@ Think step by step and be precise with element selection."""
                             }
                         },
                         'required': ['nodeId', 'text']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'checkFormErrors',
+                    'description': 'Check if there are any visible form validation errors on the page. Use this after clicking Submit to verify the form was submitted successfully, or to check why a form submission failed.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {}
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'selectDate',
+                    'description': 'Select a date in a date picker field. Use this for date inputs instead of inputText. Handles various date picker formats.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'nodeId': {
+                                'type': 'integer',
+                                'description': 'The nodeId of the date input element'
+                            },
+                            'date': {
+                                'type': 'string',
+                                'description': 'Date in format YYYY-MM-DD or MM/DD/YYYY (e.g., "2024-01-15" or "01/15/2024")'
+                            }
+                        },
+                        'required': ['nodeId', 'date']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'getElementState',
+                    'description': 'Get the current state of an element (checked/unchecked, value, etc.). Use before clicking checkboxes or radios to avoid double-toggling.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'nodeId': {
+                                'type': 'integer',
+                                'description': 'The nodeId of the element to check'
+                            }
+                        },
+                        'required': ['nodeId']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'selectDropdownOption',
+                    'description': 'Select an option from a dropdown menu by its visible text. More reliable than clicking for dropdowns.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'nodeId': {
+                                'type': 'integer',
+                                'description': 'The nodeId of the dropdown element'
+                            },
+                            'optionText': {
+                                'type': 'string',
+                                'description': 'The visible text of the option to select'
+                            }
+                        },
+                        'required': ['nodeId', 'optionText']
                     }
                 }
             },

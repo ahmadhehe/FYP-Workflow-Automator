@@ -73,7 +73,7 @@ function ActionItem({ action, isLatest }) {
   return (
     <div className={clsx(
       'flex gap-4 p-4 rounded-lg transition-all duration-300',
-      isLatest ? 'bg-maroon-50 border border-maroon-200' : 'hover:bg-gray-50'
+      isLatest ? 'bg-maroon-50 border border-maroon-200 animate-fade-in' : 'hover:bg-gray-50'
     )}>
       {/* Icon */}
       <div className={clsx(
@@ -135,21 +135,13 @@ function ActionItem({ action, isLatest }) {
 
 export function ActionTimeline({ events, taskStatus }) {
   const containerRef = useRef(null);
-  const shouldAutoScroll = useRef(true);
 
-  // Auto-scroll to latest action
+  // Auto-scroll to top when new event arrives (reverse order)
   useEffect(() => {
-    if (shouldAutoScroll.current && containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    if (containerRef.current) {
+      containerRef.current.scrollTop = 0;
     }
-  }, [events]);
-
-  // Handle manual scroll
-  const handleScroll = () => {
-    if (!containerRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    shouldAutoScroll.current = scrollHeight - scrollTop - clientHeight < 100;
-  };
+  }, [events.length]);
 
   const isEmpty = events.length === 0;
 
@@ -182,7 +174,6 @@ export function ActionTimeline({ events, taskStatus }) {
       {/* Timeline content */}
       <div 
         ref={containerRef}
-        onScroll={handleScroll}
         className="flex-1 overflow-y-auto p-4 space-y-2"
       >
         {isEmpty ? (
@@ -196,11 +187,11 @@ export function ActionTimeline({ events, taskStatus }) {
             </p>
           </div>
         ) : (
-          events.map((action, index) => (
+          [...events].reverse().map((action, index) => (
             <ActionItem 
               key={`${action.timestamp}-${index}`}
               action={action}
-              isLatest={index === events.length - 1}
+              isLatest={index === 0}
             />
           ))
         )}
