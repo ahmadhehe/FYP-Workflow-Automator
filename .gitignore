@@ -33,7 +33,11 @@ screenshots/
 
 # Browser Profile (persistent browser data)
 browser_profile/
-
+client_secret.json
 # Workflow history and LLM logs (contains sensitive data)
 flows_history.json
 llm_logs/
+
+# Google OAuth tokens (user-specific, sensitive)
+google_tokens.json
+flows_history.json

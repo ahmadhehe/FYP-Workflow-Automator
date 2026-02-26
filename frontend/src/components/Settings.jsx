@@ -7,7 +7,9 @@ import {
   TrashIcon,
   CheckIcon,
   UserCircleIcon,
-  GlobeAltIcon
+  GlobeAltIcon,
+  LinkIcon,
+  ArrowPathIcon
 } from '@heroicons/react/24/outline';
 import api from '../services/api';
 import clsx from 'clsx';
@@ -19,6 +21,10 @@ export function Settings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  
+  // Google account state
+  const [googleStatus, setGoogleStatus] = useState(null);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   // Settings state (stored in localStorage for frontend-only settings)
   const [settings, setSettings] = useState({
@@ -32,12 +38,14 @@ export function Settings() {
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const [status, profile] = await Promise.all([
+        const [status, profile, gStatus] = await Promise.all([
           api.getStatus(),
-          api.getProfileStatus()
+          api.getProfileStatus(),
+          api.getGoogleAuthStatus().catch(() => null)
         ]);
         setBrowserStatus(status);
         setProfileStatus(profile);
+        if (gStatus) setGoogleStatus(gStatus);
       } catch (error) {
         console.error('Failed to fetch status:', error);
       } finally {
@@ -126,6 +134,52 @@ export function Settings() {
     } catch (error) {
       console.error('Failed to clear profile:', error);
       alert(error.message || 'Failed to clear profile');
+    }
+  };
+
+  const handleConnectGoogle = async () => {
+    setGoogleLoading(true);
+    try {
+      const data = await api.getGoogleAuthUrl();
+      // Open OAuth consent in a new window
+      const authWindow = window.open(data.auth_url, 'google-auth', 'width=500,height=700');
+      
+      // Poll for completion
+      const pollInterval = setInterval(async () => {
+        try {
+          if (authWindow && authWindow.closed) {
+            clearInterval(pollInterval);
+            // Refresh status
+            const status = await api.getGoogleAuthStatus();
+            setGoogleStatus(status);
+            setGoogleLoading(false);
+          }
+        } catch {
+          clearInterval(pollInterval);
+          setGoogleLoading(false);
+        }
+      }, 1000);
+      
+      // Safety timeout after 5 minutes
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        setGoogleLoading(false);
+      }, 300000);
+    } catch (error) {
+      console.error('Failed to start Google auth:', error);
+      alert(error.message || 'Failed to connect Google account. Make sure client_secret.json exists in the project root.');
+      setGoogleLoading(false);
+    }
+  };
+
+  const handleDisconnectGoogle = async () => {
+    if (!window.confirm('Are you sure you want to disconnect your Google account?')) return;
+    try {
+      await api.disconnectGoogle();
+      setGoogleStatus({ connected: false, email: null });
+    } catch (error) {
+      console.error('Failed to disconnect Google:', error);
+      alert(error.message || 'Failed to disconnect Google account');
     }
   };
 
@@ -278,6 +332,79 @@ export function Settings() {
           {browserStatus?.browser_running && !profileStatus?.profile_browser_running && (
             <p className="text-sm text-amber-600 mt-2">
               ⚠️ Stop the automation browser first to set up credentials
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Google Account */}
+      <div className="card">
+        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+          <div className="flex items-center gap-3">
+            <LinkIcon className="h-5 w-5 text-blue-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Google Account</h2>
+          </div>
+        </div>
+        <div className="p-6 space-y-4 bg-white">
+          <p className="text-sm text-gray-600 mb-4">
+            Connect your Google account to let the agent read, write, and create Google Spreadsheets 
+            directly via the Sheets API. This is faster and more reliable than browser-based interaction.
+          </p>
+          
+          {/* Google Status */}
+          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            <div>
+              <p className="text-gray-700 font-medium">Connection Status</p>
+              <p className="text-sm text-gray-500">
+                {googleStatus?.connected 
+                  ? `Connected as ${googleStatus.email || 'Google User'}`
+                  : 'Not connected'
+                }
+              </p>
+            </div>
+            <span className={clsx(
+              'px-3 py-1 rounded-full text-sm font-medium',
+              googleStatus?.connected 
+                ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-gray-100 text-gray-500'
+            )}>
+              {googleStatus?.connected ? 'Connected' : 'Not Connected'}
+            </span>
+          </div>
+
+          {/* Google Actions */}
+          <div className="flex items-center gap-3">
+            {googleStatus?.connected ? (
+              <button 
+                onClick={handleDisconnectGoogle} 
+                className="btn-danger py-2 px-4"
+              >
+                Disconnect Google Account
+              </button>
+            ) : (
+              <button 
+                onClick={handleConnectGoogle} 
+                className="btn-primary py-2 px-4 flex items-center gap-2"
+                disabled={googleLoading}
+              >
+                {googleLoading ? (
+                  <>
+                    <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                    Connecting...
+                  </>
+                ) : (
+                  <>
+                    <GlobeAltIcon className="h-4 w-4" />
+                    Connect Google Account
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+
+          {!googleStatus?.credentials_file_exists && !googleStatus?.connected && (
+            <p className="text-sm text-amber-600 mt-2">
+              ⚠️ OAuth credentials not found. Place <code className="bg-gray-100 px-1 rounded">client_secret.json</code> in the project root.
             </p>
           )}
         </div>

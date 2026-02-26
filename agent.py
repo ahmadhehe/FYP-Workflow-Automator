@@ -12,13 +12,14 @@ load_dotenv()
 
 
 class BrowserAgent:
-    def __init__(self, provider: str = None, headless: bool = False, use_profile: bool = True):
+    def __init__(self, provider: str = None, headless: bool = False, use_profile: bool = True, google_sheets_client=None):
         """Initialize the browser agent"""
         provider = provider or os.getenv("DEFAULT_PROVIDER", "openai")
         
         self.provider = provider  # Track current provider
         self.browser = BrowserController(headless=headless, use_profile=use_profile)
         self.llm = LLMClient(provider=provider)
+        self.google_sheets = google_sheets_client  # Optional Google Sheets client
         self.conversation_history: List[Dict[str, Any]] = []
         self.max_iterations = 45
         
@@ -220,6 +221,77 @@ class BrowserAgent:
             elif tool_name == 'getNavigationContext':
                 result = self.browser.get_navigation_context()
                 print(f"    ✓ Retrieved navigation context")
+                return result
+            
+            # Google Sheets API Tools
+            elif tool_name == 'readSpreadsheet':
+                if not self.google_sheets or not self.google_sheets.is_authenticated():
+                    return {'success': False, 'error': 'Google account not connected. Please ask the user to connect their Google account in Settings.'}
+                result = self.google_sheets.read_spreadsheet(
+                    arguments['spreadsheetId'],
+                    arguments['range']
+                )
+                print(f"    ✓ Read spreadsheet {'succeeded' if result.get('success') else 'failed'}")
+                return result
+            
+            elif tool_name == 'writeSpreadsheet':
+                if not self.google_sheets or not self.google_sheets.is_authenticated():
+                    return {'success': False, 'error': 'Google account not connected. Please ask the user to connect their Google account in Settings.'}
+                values = arguments['values']
+                if isinstance(values, str):
+                    values = json.loads(values)
+                result = self.google_sheets.write_spreadsheet(
+                    arguments['spreadsheetId'],
+                    arguments['range'],
+                    values
+                )
+                print(f"    ✓ Write spreadsheet {'succeeded' if result.get('success') else 'failed'}")
+                return result
+            
+            elif tool_name == 'appendRows':
+                if not self.google_sheets or not self.google_sheets.is_authenticated():
+                    return {'success': False, 'error': 'Google account not connected. Please ask the user to connect their Google account in Settings.'}
+                values = arguments['values']
+                if isinstance(values, str):
+                    values = json.loads(values)
+                result = self.google_sheets.append_rows(
+                    arguments['spreadsheetId'],
+                    arguments['range'],
+                    values
+                )
+                print(f"    ✓ Append rows {'succeeded' if result.get('success') else 'failed'}")
+                return result
+            
+            elif tool_name == 'createSpreadsheet':
+                if not self.google_sheets or not self.google_sheets.is_authenticated():
+                    return {'success': False, 'error': 'Google account not connected. Please ask the user to connect their Google account in Settings.'}
+                result = self.google_sheets.create_spreadsheet(
+                    arguments['title'],
+                    arguments.get('sheetNames')
+                )
+                print(f"    ✓ Create spreadsheet {'succeeded' if result.get('success') else 'failed'}")
+                return result
+            
+            elif tool_name == 'getSheetsList':
+                if not self.google_sheets or not self.google_sheets.is_authenticated():
+                    return {'success': False, 'error': 'Google account not connected. Please ask the user to connect their Google account in Settings.'}
+                result = self.google_sheets.get_sheets_list(
+                    arguments['spreadsheetId']
+                )
+                print(f"    ✓ Get sheets list {'succeeded' if result.get('success') else 'failed'}")
+                return result
+            
+            elif tool_name == 'formatCells':
+                if not self.google_sheets or not self.google_sheets.is_authenticated():
+                    return {'success': False, 'error': 'Google account not connected. Please ask the user to connect their Google account in Settings.'}
+                requests_data = arguments['requests']
+                if isinstance(requests_data, str):
+                    requests_data = json.loads(requests_data)
+                result = self.google_sheets.format_cells(
+                    arguments['spreadsheetId'],
+                    requests_data
+                )
+                print(f"    ✓ Format cells {'succeeded' if result.get('success') else 'failed'}")
                 return result
                 
             else:

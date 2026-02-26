@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
-import { 
-  PaperAirplaneIcon, 
+import React, { useState, useRef } from 'react';
+import {
+  PaperAirplaneIcon,
   GlobeAltIcon,
   ChevronDownIcon,
   SparklesIcon,
   DocumentPlusIcon,
-  XMarkIcon
+  XMarkIcon,
+  MicrophoneIcon,
+  StopIcon
 } from '@heroicons/react/24/outline';
 import clsx from 'clsx';
 import api from '../services/api';
@@ -24,6 +26,10 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
   const [uploadedFile, setUploadedFile] = useState(null);
   const [fileContent, setFileContent] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const recognitionRef = useRef(null);
+  const baseTextRef = useRef('');
+  const finalTranscriptRef = useRef('');
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -37,7 +43,7 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
     }
 
     setIsUploading(true);
-    
+
     try {
       // Check if it's a PDF
       if (file.name.toLowerCase().endsWith('.pdf')) {
@@ -50,13 +56,13 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
         const reader = new FileReader();
         reader.onload = (event) => {
           let content = event.target.result;
-          
+
           // Truncate if content is too long (keep first 50,000 characters)
           const MAX_CHARS = 50000;
           if (content.length > MAX_CHARS) {
             content = content.substring(0, MAX_CHARS) + '\n\n[... Content truncated due to length ...]';
           }
-          
+
           setFileContent(content);
           setUploadedFile(file);
         };
@@ -76,10 +82,72 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
     setFileContent(null);
   };
 
+  const startRecording = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('Speech recognition is not supported in this browser. Please use Chrome.');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognitionRef.current = recognition;
+
+    // Capture current text as the base
+    baseTextRef.current = instruction;
+    finalTranscriptRef.current = '';
+
+    recognition.onresult = (event) => {
+      let interimTranscript = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscriptRef.current += transcript;
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      // Build full text: base + final accumulated + current interim
+      const base = baseTextRef.current;
+      const separator = base && !base.endsWith(' ') ? ' ' : '';
+      setInstruction(base + separator + finalTranscriptRef.current + interimTranscript);
+    };
+
+    // Auto-stop when user stops talking
+    recognition.onspeechend = () => {
+      recognition.stop();
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+    };
+
+    recognition.onerror = (event) => {
+      console.error('Speech recognition error:', event.error);
+      if (event.error === 'not-allowed') {
+        alert('Microphone access denied. Please allow microphone permissions.');
+      }
+      setIsRecording(false);
+    };
+
+    recognition.start();
+    setIsRecording(true);
+  };
+
+  const stopRecording = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!instruction.trim() || isRunning) return;
-    
+
     onSubmit({
       instruction: instruction.trim(),
       initialUrl: initialUrl.trim() || null,
@@ -108,13 +176,33 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
         {/* Main instruction input */}
         <div>
           <label className="label">Task Description</label>
-          <textarea
-            value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
-            placeholder="e.g., Go to amazon.com, search for 'wireless headphones', and find the best rated option under $100"
-            className="input min-h-[120px] resize-none"
-            disabled={isRunning}
-          />
+          <div className="relative">
+            <textarea
+              value={instruction}
+              onChange={(e) => setInstruction(e.target.value)}
+              placeholder="e.g., Go to amazon.com, search for 'wireless headphones', and find the best rated option under $100"
+              className="input min-h-[120px] resize-none pr-14"
+              disabled={isRunning}
+            />
+            <button
+              type="button"
+              onClick={isRecording ? stopRecording : startRecording}
+              disabled={isRunning}
+              title={isRecording ? 'Stop recording (or just stop talking)' : 'Voice input'}
+              className={clsx(
+                'absolute right-3 top-3 p-2 rounded-full transition-all duration-200',
+                isRecording
+                  ? 'bg-red-500 text-white recording-pulse hover:bg-red-600'
+                  : 'bg-gray-100 text-gray-500 hover:bg-maroon-100 hover:text-maroon-600'
+              )}
+            >
+              {isRecording ? (
+                <StopIcon className="h-5 w-5" />
+              ) : (
+                <MicrophoneIcon className="h-5 w-5" />
+              )}
+            </button>
+          </div>
         </div>
 
         {/* File Upload Section */}

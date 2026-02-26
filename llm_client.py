@@ -92,7 +92,32 @@ class LLMClient:
 - Take a final snapshot to confirm the success message or confirmation page
 - If errors found, fix them and resubmit
 
-Be decisive. If you see a "Next" button, click it. Don't keep scrolling looking for more content."""
+Be decisive. If you see a "Next" button, click it. Don't keep scrolling looking for more content.
+
+**GOOGLE SHEETS API TOOLS:**
+You have direct API access to Google Sheets (if the user has connected their Google account). These are MUCH faster and more reliable than manipulating sheets through the browser.
+
+- **readSpreadsheet(spreadsheetId, range)** - Read cell values. Range uses A1 notation: "Sheet1!A1:D10"
+- **writeSpreadsheet(spreadsheetId, range, values)** - Write/overwrite cells. Values is a 2D array.
+- **appendRows(spreadsheetId, range, values)** - Append rows after existing data.
+- **createSpreadsheet(title, sheetNames?)** - Create a new spreadsheet. Returns URL and ID.
+- **getSheetsList(spreadsheetId)** - List all sheet tabs in a spreadsheet.
+- **formatCells(spreadsheetId, requests)** - Apply formatting (bold, colors, borders, etc.)
+
+**How to get spreadsheetId from a URL:**
+From `https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms/edit` → spreadsheetId is `1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms`
+
+**When to use Sheets API vs Browser:**
+- USE API TOOLS for: reading data, writing data, creating sheets, bulk operations
+- USE BROWSER for: sharing settings, adding comments, complex chart interactions
+- If Sheets API returns an auth error, tell the user to connect their Google account in Settings.
+
+**Example - API workflow:**
+1. User says "Read data from [sheets URL]"
+2. Extract spreadsheetId from URL
+3. getSheetsList(spreadsheetId) → see available tabs
+4. readSpreadsheet(spreadsheetId, "Sheet1!A1:Z100") → get data
+5. Respond with summary"""
 
     def chat_completion(
         self, 
@@ -252,6 +277,33 @@ Be decisive. If you see a "Next" button, click it. Don't keep scrolling looking 
                 'array': protos.Type.ARRAY,
             }
             
+            def convert_property(prop_schema):
+                """Recursively convert a single property schema to Gemini format"""
+                prop_type = prop_schema.get('type', 'string')
+                prop_kwargs = {
+                    'type': type_mapping.get(prop_type, protos.Type.STRING)
+                }
+                if 'description' in prop_schema:
+                    prop_kwargs['description'] = prop_schema['description']
+                if 'enum' in prop_schema:
+                    prop_kwargs['enum'] = prop_schema['enum']
+                
+                # Handle array items recursively
+                if prop_type == 'array' and 'items' in prop_schema:
+                    items_schema = prop_schema['items']
+                    prop_kwargs['items'] = convert_property(items_schema)
+                
+                # Handle nested objects with properties
+                if prop_type == 'object' and 'properties' in prop_schema:
+                    nested_props = {}
+                    for nested_name, nested_schema in prop_schema['properties'].items():
+                        nested_props[nested_name] = convert_property(nested_schema)
+                    prop_kwargs['properties'] = nested_props
+                    if 'required' in prop_schema:
+                        prop_kwargs['required'] = prop_schema['required']
+                
+                return protos.Schema(**prop_kwargs)
+            
             schema_type = schema.get('type', 'object')
             properties = schema.get('properties', {})
             required = schema.get('required', [])
@@ -263,18 +315,7 @@ Be decisive. If you see a "Next" button, click it. Don't keep scrolling looking 
             # Convert properties to Gemini Schema format
             gemini_properties = {}
             for prop_name, prop_schema in properties.items():
-                prop_type = prop_schema.get('type', 'string')
-                prop_kwargs = {
-                    'type': type_mapping.get(prop_type, protos.Type.STRING)
-                }
-                if 'description' in prop_schema:
-                    prop_kwargs['description'] = prop_schema['description']
-                if 'enum' in prop_schema:
-                    prop_kwargs['enum'] = prop_schema['enum']
-                if 'default' in prop_schema:
-                    # Gemini doesn't support default directly, skip it
-                    pass
-                gemini_properties[prop_name] = protos.Schema(**prop_kwargs)
+                gemini_properties[prop_name] = convert_property(prop_schema)
             
             return protos.Schema(
                 type=type_mapping.get(schema_type, protos.Type.OBJECT),
@@ -419,19 +460,27 @@ Be decisive. If you see a "Next" button, click it. Don't keep scrolling looking 
             elif hasattr(part, 'function_call') and part.function_call:
                 fc = part.function_call
                 
-                # Convert Gemini's MapComposite args to a regular dict
-                # fc.args is a special proto object, need to convert it properly
+                # Convert Gemini's proto-plus args to a regular Python dict
+                # fc.args is a Struct-like proto object; we recursively convert it
+                def _proto_to_python(val):
+                    """Recursively convert protobuf/proto-plus values to native Python"""
+                    if val is None:
+                        return None
+                    if isinstance(val, (str, int, float, bool)):
+                        return val
+                    # Dict-like (Struct, MapComposite)
+                    if hasattr(val, 'items') and callable(getattr(val, 'items')):
+                        return {str(k): _proto_to_python(v) for k, v in val.items()}
+                    # List-like (ListValue, RepeatedComposite)
+                    if hasattr(val, '__iter__'):
+                        try:
+                            return [_proto_to_python(item) for item in val]
+                        except TypeError:
+                            return str(val)
+                    return val
+                
                 try:
-                    if hasattr(fc.args, 'items'):
-                        # It's a dict-like object
-                        args_dict = dict(fc.args.items())
-                    elif hasattr(fc.args, '_pb'):
-                        # It's a protobuf object, convert via MessageToDict
-                        from google.protobuf.json_format import MessageToDict
-                        args_dict = MessageToDict(fc.args._pb)
-                    else:
-                        # Try to convert it as-is
-                        args_dict = dict(fc.args) if fc.args else {}
+                    args_dict = _proto_to_python(fc.args) or {}
                 except Exception as e:
                     print(f"Warning: Failed to convert Gemini args: {e}")
                     args_dict = {}
@@ -830,6 +879,152 @@ Be decisive. If you see a "Next" button, click it. Don't keep scrolling looking 
                                 'description': 'Index of tab to duplicate (omit to duplicate current tab)'
                             }
                         }
+                    }
+                }
+            },
+            # Google Sheets API Tools
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'readSpreadsheet',
+                    'description': 'Read values from a Google Spreadsheet using the Sheets API. Much faster and more reliable than browser navigation. Requires Google account to be connected.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'spreadsheetId': {
+                                'type': 'string',
+                                'description': 'The spreadsheet ID from the Google Sheets URL (the long string between /d/ and /edit)'
+                            },
+                            'range': {
+                                'type': 'string',
+                                'description': 'A1 notation range, e.g. "Sheet1!A1:D10" or "Sheet1" for entire sheet'
+                            }
+                        },
+                        'required': ['spreadsheetId', 'range']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'writeSpreadsheet',
+                    'description': 'Write values to a Google Spreadsheet. Overwrites existing data in the specified range. Values should be a 2D array (array of rows, each row is an array of cell values).',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'spreadsheetId': {
+                                'type': 'string',
+                                'description': 'The spreadsheet ID from the Google Sheets URL'
+                            },
+                            'range': {
+                                'type': 'string',
+                                'description': 'A1 notation range, e.g. "Sheet1!A1:D3"'
+                            },
+                            'values': {
+                                'type': 'array',
+                                'description': '2D array of values. E.g. [["Name","Age"],["Alice","30"],["Bob","25"]]',
+                                'items': {
+                                    'type': 'array',
+                                    'items': {
+                                        'type': 'string'
+                                    }
+                                }
+                            }
+                        },
+                        'required': ['spreadsheetId', 'range', 'values']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'appendRows',
+                    'description': 'Append rows to the end of existing data in a Google Spreadsheet. Use this to add new data without overwriting.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'spreadsheetId': {
+                                'type': 'string',
+                                'description': 'The spreadsheet ID from the Google Sheets URL'
+                            },
+                            'range': {
+                                'type': 'string',
+                                'description': 'A1 notation range indicating where to append, e.g. "Sheet1!A:D"'
+                            },
+                            'values': {
+                                'type': 'array',
+                                'description': '2D array of row values to append',
+                                'items': {
+                                    'type': 'array',
+                                    'items': {
+                                        'type': 'string'
+                                    }
+                                }
+                            }
+                        },
+                        'required': ['spreadsheetId', 'range', 'values']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'createSpreadsheet',
+                    'description': 'Create a new Google Spreadsheet. Returns the spreadsheet URL and ID.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'title': {
+                                'type': 'string',
+                                'description': 'Title of the new spreadsheet'
+                            },
+                            'sheetNames': {
+                                'type': 'array',
+                                'description': 'Optional list of sheet tab names. Defaults to ["Sheet1"].',
+                                'items': {
+                                    'type': 'string'
+                                }
+                            }
+                        },
+                        'required': ['title']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'getSheetsList',
+                    'description': 'Get a list of all sheet tabs in a Google Spreadsheet, including their names, row counts, and column counts.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'spreadsheetId': {
+                                'type': 'string',
+                                'description': 'The spreadsheet ID from the Google Sheets URL'
+                            }
+                        },
+                        'required': ['spreadsheetId']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'formatCells',
+                    'description': 'Apply formatting to cells in a Google Spreadsheet (bold, colors, borders, column widths, etc.) using batchUpdate requests.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'spreadsheetId': {
+                                'type': 'string',
+                                'description': 'The spreadsheet ID from the Google Sheets URL'
+                            },
+                            'requests': {
+                                'type': 'string',
+                                'description': 'JSON-encoded array of Google Sheets API batchUpdate request objects. E.g. [{"repeatCell": {"range": {"sheetId": 0, "startRowIndex": 0, "endRowIndex": 1}, "cell": {"userEnteredFormat": {"textFormat": {"bold": true}}}, "fields": "userEnteredFormat.textFormat.bold"}}]'
+                            }
+                        },
+                        'required': ['spreadsheetId', 'requests']
                     }
                 }
             }

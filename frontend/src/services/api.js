@@ -14,11 +14,11 @@ class ApiService {
     try {
       const response = await fetch(url, config);
       const data = await response.json();
-      
+
       if (!response.ok) {
         throw new Error(data.detail || 'Request failed');
       }
-      
+
       return data;
     } catch (error) {
       console.error('API Error:', error);
@@ -59,20 +59,20 @@ class ApiService {
   async uploadFile(file) {
     const formData = new FormData();
     formData.append('file', file);
-    
+
     const url = `${API_BASE}/upload-file`;
     try {
       const response = await fetch(url, {
         method: 'POST',
         body: formData,
       });
-      
+
       const data = await response.json();
-      
+
       if (!response.ok) {
         throw new Error(data.detail || 'File upload failed');
       }
-      
+
       return data;
     } catch (error) {
       console.error('File Upload Error:', error);
@@ -129,6 +129,44 @@ class ApiService {
   // Costs analytics
   async getCosts(timeRange = 'all') {
     return this.request(`/costs?time_range=${timeRange}`);
+  }
+
+  // Google Sheets OAuth
+  async getGoogleAuthUrl() {
+    return this.request('/auth/google');
+  }
+
+  async getGoogleAuthStatus() {
+    return this.request('/auth/google/status');
+  }
+
+  async disconnectGoogle() {
+    return this.request('/auth/google/disconnect', { method: 'POST' });
+  }
+
+  // Voice transcription
+  async transcribeAudio(audioBlob) {
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'recording.webm');
+
+    const url = `${API_BASE}/transcribe`;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Transcription failed');
+      }
+
+      return data;
+    } catch (error) {
+      console.error('Transcription Error:', error);
+      throw error;
+    }
   }
 }
 

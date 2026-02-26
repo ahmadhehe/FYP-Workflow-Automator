@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from agent import BrowserAgent
 from browser_controller import BrowserController, DEFAULT_PROFILE_DIR
+from google_sheets_client import GoogleSheetsClient
 from dotenv import load_dotenv
 import uvicorn
 import asyncio
@@ -271,6 +272,9 @@ agent: Optional[BrowserAgent] = None
 profile_browser: Optional[BrowserController] = None
 current_task = None
 
+# Google Sheets client (singleton)
+google_sheets_client = GoogleSheetsClient()
+
 # Dedicated thread pool for Playwright operations (single thread to ensure thread affinity)
 playwright_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playwright")
 playwright_thread_lock = threading.Lock()
@@ -282,7 +286,7 @@ playwright_thread_lock = threading.Lock()
 def _create_and_start_agent(provider: str, headless: bool, use_profile: bool = True) -> BrowserAgent:
     """Synchronous function to create and start agent (runs in thread pool)"""
     print(f"[Server] Creating agent with provider={provider}, headless={headless}, use_profile={use_profile}")
-    agent = BrowserAgent(provider=provider, headless=headless, use_profile=use_profile)
+    agent = BrowserAgent(provider=provider, headless=headless, use_profile=use_profile, google_sheets_client=google_sheets_client)
     agent.start()
     print(f"[Server] Agent started successfully")
     return agent
@@ -864,6 +868,91 @@ async def upload_file(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ============================================================================
+# Voice Transcription (Google Cloud Speech-to-Text)
+# ============================================================================
+
+@app.post("/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    """Transcribe audio using Google Cloud Speech-to-Text API"""
+    import base64
+    import httpx
+
+    api_key = os.getenv("GOOGLE_CLOUD_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Google Cloud API key not configured. Add GOOGLE_CLOUD_API_KEY to your .env file."
+        )
+
+    try:
+        audio_bytes = await file.read()
+
+        if len(audio_bytes) == 0:
+            raise HTTPException(status_code=400, detail="Empty audio file received")
+
+        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+        # Determine encoding from content type / filename
+        content_type = file.content_type or ""
+        if "webm" in content_type or (file.filename and "webm" in file.filename):
+            encoding = "WEBM_OPUS"
+        elif "ogg" in content_type:
+            encoding = "OGG_OPUS"
+        elif "wav" in content_type:
+            encoding = "LINEAR16"
+        else:
+            encoding = "WEBM_OPUS"  # Default for browser MediaRecorder
+
+        request_body = {
+            "config": {
+                "encoding": encoding,
+                "sampleRateHertz": 48000,
+                "languageCode": "en-US",
+                "model": "latest_long",
+                "enableAutomaticPunctuation": True,
+            },
+            "audio": {
+                "content": audio_b64
+            }
+        }
+
+        stt_url = f"https://speech.googleapis.com/v1/speech:recognize?key={api_key}"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(stt_url, json=request_body)
+
+        if response.status_code != 200:
+            error_detail = response.json().get("error", {}).get("message", response.text)
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Google STT API error: {error_detail}"
+            )
+
+        result = response.json()
+        results = result.get("results", [])
+
+        if not results:
+            return {"success": True, "transcript": "", "message": "No speech detected"}
+
+        # Combine all transcript alternatives
+        transcript = " ".join(
+            alt["transcript"]
+            for r in results
+            for alt in r.get("alternatives", [])[:1]
+        )
+
+        return {
+            "success": True,
+            "transcript": transcript.strip(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+
 @app.post("/task", response_model=TaskResponse)
 async def run_task(request: TaskRequest, background_tasks: BackgroundTasks):
     """Run a task with the agent"""
@@ -1005,6 +1094,93 @@ async def clear_flows():
     """Clear all flow history"""
     save_flows([])
     return {"status": "cleared"}
+
+# ============================================================================
+# Google Sheets OAuth Endpoints
+# ============================================================================
+
+@app.get("/auth/google")
+async def google_auth_url():
+    """Get the Google OAuth consent URL"""
+    try:
+        if not google_sheets_client.credentials_file_exists():
+            raise HTTPException(
+                status_code=400,
+                detail="Google OAuth credentials not configured. Place client_secret.json in the project root."
+            )
+        auth_url = google_sheets_client.get_auth_url()
+        return {"auth_url": auth_url}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/auth/google/callback")
+async def google_auth_callback(code: str = None, error: str = None):
+    """Handle the OAuth redirect callback from Google"""
+    if error:
+        html = f"""
+        <html><body>
+            <h2>Authentication Failed</h2>
+            <p>{error}</p>
+            <p>You can close this window.</p>
+            <script>setTimeout(() => window.close(), 3000);</script>
+        </body></html>
+        """
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(content=html)
+    
+    if not code:
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(content="<html><body><h2>No authorization code received</h2></body></html>")
+    
+    try:
+        result = google_sheets_client.handle_callback(code)
+        email = result.get('email', 'Unknown')
+        
+        html = f"""
+        <html>
+        <head><title>Google Account Connected</title></head>
+        <body style="font-family: system-ui, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f9fafb;">
+            <div style="text-align: center; padding: 2rem; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                <div style="font-size: 48px; margin-bottom: 16px;">&#10003;</div>
+                <h2 style="color: #166534; margin-bottom: 8px;">Google Account Connected!</h2>
+                <p style="color: #6b7280;">Signed in as <strong>{email}</strong></p>
+                <p style="color: #9ca3af; font-size: 14px; margin-top: 16px;">This window will close automatically...</p>
+            </div>
+            <script>setTimeout(() => window.close(), 2500);</script>
+        </body>
+        </html>
+        """
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(content=html)
+        
+    except Exception as e:
+        from fastapi.responses import HTMLResponse
+        html = f"""
+        <html><body style="font-family: system-ui; display: flex; justify-content: center; align-items: center; height: 100vh;">
+            <div style="text-align: center;">
+                <h2 style="color: #dc2626;">Authentication Failed</h2>
+                <p>{str(e)}</p>
+                <script>setTimeout(() => window.close(), 5000);</script>
+            </div>
+        </body></html>
+        """
+        return HTMLResponse(content=html)
+
+@app.get("/auth/google/status")
+async def google_auth_status():
+    """Check Google account connection status"""
+    return google_sheets_client.get_status()
+
+@app.post("/auth/google/disconnect")
+async def google_auth_disconnect():
+    """Disconnect Google account and revoke tokens"""
+    try:
+        result = google_sheets_client.disconnect()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
 # Cost Analytics Endpoints

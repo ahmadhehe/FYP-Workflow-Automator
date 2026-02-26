@@ -112,7 +112,45 @@ agent.run(
 )
 ```
 
-## Step 6 (Optional): Run API Server
+## Step 6 (Optional): Google Sheets Integration
+
+The agent can directly read, write, and create Google Spreadsheets via the Sheets API (much faster than browser-based interaction).
+
+### One-Time Setup (Developer Only)
+
+If `client_secret.json` is already included in the project, skip to **User Setup** below.
+
+To create your own OAuth credentials:
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project (or select an existing one)
+3. Enable the **Google Sheets API**:
+   - Go to **APIs & Services** → **Library**
+   - Search for "Google Sheets API" and click **Enable**
+4. Configure the **OAuth consent screen**:
+   - Go to **APIs & Services** → **OAuth consent screen**
+   - Choose **External** user type
+   - Fill in app name and your email
+   - Add scopes: `https://www.googleapis.com/auth/spreadsheets` and `openid` and `email`
+   - Add your Google account as a **test user**
+5. Create **OAuth 2.0 credentials**:
+   - Go to **APIs & Services** → **Credentials**
+   - Click **Create Credentials** → **OAuth client ID**
+   - Choose **Web application**
+   - Add `http://localhost:8000/auth/google/callback` as an **Authorized redirect URI**
+   - Download the credentials and save as `client_secret.json` in the project root
+
+### User Setup
+
+1. Start the server (`python server.py`) and open the frontend
+2. Go to **Settings** → **Google Account**
+3. Click **Connect Google Account**
+4. Sign in with your Google account and grant access
+5. The window will auto-close — you're connected!
+
+Now the agent can use `readSpreadsheet`, `writeSpreadsheet`, `createSpreadsheet`, etc. when you ask it to work with Google Sheets.
+
+## Step 7 (Optional): Run API Server
 
 For REST API access:
 
