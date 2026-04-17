@@ -6,6 +6,9 @@ from typing import Dict, List, Any, Optional
 import base64
 import time
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Default profile directory for persistent browser data
 DEFAULT_PROFILE_DIR = os.path.join(os.path.dirname(__file__), "browser_profile")
@@ -137,7 +140,8 @@ class BrowserController:
                 'tab_index': self.current_tab_index,
                 'purpose': purpose or 'navigation'
             })
-            
+            self.navigation_history = self.navigation_history[-50:]
+
             # Update tab purpose if provided
             if purpose:
                 self.tab_purposes[self.current_tab_index] = purpose
@@ -437,7 +441,7 @@ class BrowserController:
             return result_elements
             
         except Exception as e:
-            print(f"Error getting DOM form elements: {e}")
+            logger.warning("Error getting DOM form elements: %s", e)
             return []
     
     def _is_in_viewport(self, rect: Dict) -> bool:
@@ -1008,26 +1012,6 @@ class BrowserController:
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
-    def _select_dropdown_by_coord(self, rect: Dict, value: str):
-        """Helper to select a dropdown value by clicking coordinates"""
-        x = rect['x'] + rect['width'] / 2
-        y = rect['y'] + rect['height'] / 2
-        
-        # Open dropdown
-        self.page.mouse.click(x, y)
-        self.page.wait_for_timeout(300)
-        
-        # Try to click the option with the value
-        try:
-            self.page.get_by_role('option', name=value).first.click(timeout=2000)
-        except:
-            # Type to filter and press Enter
-            self.page.keyboard.type(value)
-            self.page.wait_for_timeout(200)
-            self.page.keyboard.press('Enter')
-        
-        self.page.wait_for_timeout(200)
-    
     def get_element_state(self, node_id: int) -> Dict[str, Any]:
         """
         Get the current state of an element (checked, selected, value, etc.)
@@ -1239,7 +1223,7 @@ class BrowserController:
                 
         except Exception as e:
             # If waiting fails, continue anyway
-            print(f"Warning: Page ready wait failed: {e}")
+            logger.warning("Page ready wait failed: %s", e)
     
     def _get_accessibility_snapshot_with_retry(self, max_retries: int = 3):
         """Get accessibility snapshot with exponential backoff retry"""
@@ -1316,7 +1300,8 @@ class BrowserController:
                     'tab_index': new_tab_index,
                     'purpose': purpose or 'new_tab'
                 })
-            
+                self.navigation_history = self.navigation_history[-50:]
+
             # Automatically switch to the new tab
             self.page = new_page
             self.page.bring_to_front()

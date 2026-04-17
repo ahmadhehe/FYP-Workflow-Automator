@@ -6,6 +6,9 @@ import os
 from openai import OpenAI
 from anthropic import Anthropic
 import google.generativeai as genai
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -482,7 +485,7 @@ From `https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74
                 try:
                     args_dict = _proto_to_python(fc.args) or {}
                 except Exception as e:
-                    print(f"Warning: Failed to convert Gemini args: {e}")
+                    logger.warning("Failed to convert Gemini args: %s", e)
                     args_dict = {}
                 
                 class ToolCall:

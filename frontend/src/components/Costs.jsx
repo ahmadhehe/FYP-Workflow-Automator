@@ -4,8 +4,7 @@ import {
   CurrencyDollarIcon,
   ChartBarIcon,
   CalendarIcon,
-  ArrowTrendingUpIcon,
-  ArrowTrendingDownIcon
+  ArrowTrendingUpIcon
 } from '@heroicons/react/24/outline';
 import api from '../services/api';
 import clsx from 'clsx';

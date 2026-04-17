@@ -1,7 +1,7 @@
 """
 FastAPI Server - REST API + WebSocket for browser automation agent
 """
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -28,6 +28,8 @@ except ImportError:
     PdfReader = None
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # LLM Interaction Logging Setup
@@ -541,13 +543,13 @@ async def run_agent_with_events(
                 
                 # Run sync tool execution in thread pool
                 try:
-                    print(f"[Server] Executing tool: {function_name} with args: {arguments}")
+                    logger.debug("Executing tool: %s with args: %s", function_name, arguments)
                     # Execute tool in dedicated Playwright executor to maintain thread affinity
                     loop = asyncio.get_event_loop()
                     result = await loop.run_in_executor(playwright_executor, agent.execute_tool, function_name, arguments)
-                    print(f"[Server] Tool result: {result}")
+                    logger.debug("Tool result: %s", result)
                 except Exception as tool_error:
-                    print(f"[Server] Tool error: {tool_error}")
+                    logger.error("Tool error: %s", tool_error)
                     result = {'error': str(tool_error), 'success': False}
                 
                 # Check success - look at both 'error' field and 'success' field
@@ -863,8 +865,6 @@ async def upload_file(file: UploadFile = File(...)):
         
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1197,8 +1197,8 @@ PRICING = {
         "output": 15.00,  # $15 per 1M output tokens
     },
     "gemini": {
-        "input": 0.3,   # $0.075 per 1M input tokens
-        "output": 2.5,   # $0.30 per 1M output tokens
+        "input": 0.075,  # $0.075 per 1M input tokens
+        "output": 0.30,  # $0.30 per 1M output tokens
     }
 }
 

@@ -18,7 +18,6 @@ export function Settings() {
   const [browserStatus, setBrowserStatus] = useState(null);
   const [profileStatus, setProfileStatus] = useState(null);
   const [profileUrl, setProfileUrl] = useState('');
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   
@@ -29,8 +28,6 @@ export function Settings() {
   // Settings state (stored in localStorage for frontend-only settings)
   const [settings, setSettings] = useState({
     defaultProvider: localStorage.getItem('defaultProvider') || 'openai',
-    apiEndpoint: localStorage.getItem('apiEndpoint') || 'http://localhost:8000',
-    wsEndpoint: localStorage.getItem('wsEndpoint') || 'ws://localhost:8000/ws',
     autoScroll: localStorage.getItem('autoScroll') !== 'false',
     soundNotifications: localStorage.getItem('soundNotifications') === 'true',
   });
@@ -48,8 +45,6 @@ export function Settings() {
         if (gStatus) setGoogleStatus(gStatus);
       } catch (error) {
         console.error('Failed to fetch status:', error);
-      } finally {
-        setLoading(false);
       }
     };
 
@@ -433,38 +428,6 @@ export function Settings() {
             <p className="text-xs text-gray-500 mt-2">
               Make sure you have the corresponding API key set in your environment variables
             </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Connection Settings */}
-      <div className="card">
-        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-          <div className="flex items-center gap-3">
-            <ServerIcon className="h-5 w-5 text-blue-600" />
-            <h2 className="text-lg font-semibold text-gray-900">Connection</h2>
-          </div>
-        </div>
-        <div className="p-6 space-y-4 bg-white">
-          <div>
-            <label className="label">API Endpoint</label>
-            <input
-              type="url"
-              value={settings.apiEndpoint}
-              onChange={(e) => setSettings({ ...settings, apiEndpoint: e.target.value })}
-              className="input"
-              placeholder="http://localhost:8000"
-            />
-          </div>
-          <div>
-            <label className="label">WebSocket Endpoint</label>
-            <input
-              type="url"
-              value={settings.wsEndpoint}
-              onChange={(e) => setSettings({ ...settings, wsEndpoint: e.target.value })}
-              className="input"
-              placeholder="ws://localhost:8000/ws"
-            />
           </div>
         </div>
       </div>

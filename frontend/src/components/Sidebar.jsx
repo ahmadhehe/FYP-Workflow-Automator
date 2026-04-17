@@ -4,7 +4,6 @@ import {
   HomeIcon, 
   ClockIcon, 
   Cog6ToothIcon,
-  CommandLineIcon,
   SignalIcon,
   SignalSlashIcon,
   CurrencyDollarIcon

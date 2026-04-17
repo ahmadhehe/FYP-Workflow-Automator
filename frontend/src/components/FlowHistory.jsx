@@ -8,8 +8,7 @@ import {
   CheckCircleIcon,
   XCircleIcon,
   ChevronRightIcon,
-  MagnifyingGlassIcon,
-  FunnelIcon
+  MagnifyingGlassIcon
 } from '@heroicons/react/24/outline';
 import { formatDistanceToNow, format } from 'date-fns';
 import clsx from 'clsx';
