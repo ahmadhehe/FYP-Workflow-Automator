@@ -1,17 +1,19 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { 
-  HomeIcon, 
-  ClockIcon, 
+import {
+  HomeIcon,
+  ClockIcon,
   Cog6ToothIcon,
   SignalIcon,
   SignalSlashIcon,
-  CurrencyDollarIcon
+  CurrencyDollarIcon,
+  FolderOpenIcon,
 } from '@heroicons/react/24/outline';
 import clsx from 'clsx';
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: HomeIcon },
+  { name: 'Course Files', href: '/files', icon: FolderOpenIcon },
   { name: 'History', href: '/history', icon: ClockIcon },
   { name: 'Costs', href: '/costs', icon: CurrencyDollarIcon },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon },

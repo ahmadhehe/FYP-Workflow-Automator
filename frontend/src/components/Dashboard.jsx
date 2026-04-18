@@ -3,13 +3,15 @@ import { TaskInput } from './TaskInput';
 import { StatusBar } from './StatusBar';
 import { ActionTimeline } from './ActionTimeline';
 import { ResultPanel } from './ResultPanel';
+import { QuickActions } from './QuickActions';
+import { useTeacherProfile } from '../hooks/useTeacherProfile';
 import api from '../services/api';
 
-export function Dashboard({ 
-  events, 
-  taskStatus, 
-  currentIteration, 
-  isConnected, 
+export function Dashboard({
+  events,
+  taskStatus,
+  currentIteration,
+  isConnected,
   clearEvents,
   browserRunning,
   initialTask
@@ -17,9 +19,11 @@ export function Dashboard({
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [injectedPrompt, setInjectedPrompt] = useState(null);
+
+  const { courses } = useTeacherProfile();
 
   const handleSubmit = useCallback(async ({ instruction, initialUrl, provider, files }) => {
-    // Clear previous state
     clearEvents();
     setResult(null);
     setError(null);
@@ -27,7 +31,6 @@ export function Dashboard({
 
     try {
       const response = await api.runTask(instruction, initialUrl, provider, files);
-      
       if (response.success) {
         setResult(response.result);
       } else {
@@ -48,7 +51,11 @@ export function Dashboard({
     }
   }, []);
 
-  // Handle initial task from history re-run
+  const handleInjectPrompt = useCallback((promptText) => {
+    setInjectedPrompt(promptText);
+    setTimeout(() => setInjectedPrompt(null), 100);
+  }, []);
+
   React.useEffect(() => {
     if (initialTask) {
       handleSubmit(initialTask);
@@ -59,31 +66,41 @@ export function Dashboard({
 
   return (
     <div className="space-y-6 h-full">
-      {/* Page Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
         <p className="text-gray-500 mt-1">Create and monitor browser automation tasks</p>
       </div>
 
-      {/* Status Bar */}
-      <StatusBar 
-        status={effectiveStatus} 
+      <StatusBar
+        status={effectiveStatus}
         currentIteration={currentIteration}
         isConnected={isConnected}
       />
 
-      {/* Main Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" style={{ minHeight: 'calc(100vh - 320px)' }}>
-        {/* Left Column */}
+      {/* 3-column layout: Left sidebar | Task Input + Result | Timeline */}
+      <div
+        className="grid grid-cols-1 lg:grid-cols-[220px_1fr_1fr] gap-6"
+        style={{ minHeight: 'calc(100vh - 320px)' }}
+      >
+        {/* Left column: Quick Actions */}
+        <div>
+          <QuickActions
+            courses={courses}
+            onInjectPrompt={handleInjectPrompt}
+            isRunning={isRunning}
+          />
+        </div>
+
+        {/* Center column */}
         <div className="space-y-6">
-          <TaskInput 
+          <TaskInput
             onSubmit={handleSubmit}
             isRunning={isRunning}
             onStop={handleStop}
+            injectedPrompt={injectedPrompt}
           />
-          
           {(result || error) && (
-            <ResultPanel 
+            <ResultPanel
               result={result}
               status={effectiveStatus}
               error={error}
@@ -91,9 +108,9 @@ export function Dashboard({
           )}
         </div>
 
-        {/* Right Column - Action Timeline */}
+        {/* Timeline */}
         <div className="lg:row-span-2">
-          <ActionTimeline 
+          <ActionTimeline
             events={events}
             taskStatus={effectiveStatus}
           />

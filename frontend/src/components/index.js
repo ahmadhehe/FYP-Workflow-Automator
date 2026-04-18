@@ -7,3 +7,8 @@ export { FlowHistory } from './FlowHistory';
 export { Settings } from './Settings';
 export { Dashboard } from './Dashboard';
 export { Costs } from './Costs';
+export { Onboarding } from './Onboarding';
+export { QuickActions } from './QuickActions';
+export { Login } from './Login';
+export { CourseFiles } from './CourseFiles';
+export { FilesPage } from './FilesPage';

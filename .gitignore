@@ -38,6 +38,9 @@ client_secret.json
 flows_history.json
 llm_logs/
 
+# Uploaded and cached course files
+uploads/
+
 # Google OAuth tokens (user-specific, sensitive)
 google_tokens.json
 flows_history.json

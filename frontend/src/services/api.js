@@ -1,11 +1,20 @@
+import { supabase } from '../lib/supabase';
+
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
+async function getAuthHeader() {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+}
 
 class ApiService {
   async request(endpoint, options = {}) {
     const url = `${API_BASE}${endpoint}`;
+    const authHeader = await getAuthHeader();
     const config = {
       headers: {
         'Content-Type': 'application/json',
+        ...authHeader,
         ...options.headers,
       },
       ...options,
@@ -130,17 +139,60 @@ class ApiService {
     return this.request(`/costs?time_range=${timeRange}`);
   }
 
-  // Google Sheets OAuth
-  async getGoogleAuthUrl() {
-    return this.request('/auth/google');
+  // ── LMS Onboarding ──────────────────────────────────────────────────────────
+
+  async getOnboardingStatus() {
+    return this.request('/onboarding/status');
   }
 
-  async getGoogleAuthStatus() {
-    return this.request('/auth/google/status');
+  async getLMSProfile() {
+    return this.request('/profile/lms');
   }
 
-  async disconnectGoogle() {
-    return this.request('/auth/google/disconnect', { method: 'POST' });
+  async saveLMSProfile(data) {
+    return this.request('/profile/lms', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async completeOnboarding() {
+    return this.request('/profile/lms/complete-onboarding', { method: 'POST' });
+  }
+
+  async addCourse(data) {
+    return this.request('/profile/lms/courses', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateCourse(courseId, data) {
+    return this.request(`/profile/lms/courses/${courseId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteCourse(courseId) {
+    return this.request(`/profile/lms/courses/${courseId}`, { method: 'DELETE' });
+  }
+
+  async uploadCourseFile(courseId, file, fileType = 'other') {
+    const formData = new FormData();
+    formData.append('file', file);
+    const url = `${API_BASE}/profile/lms/courses/${courseId}/files?file_type=${fileType}`;
+    const response = await fetch(url, { method: 'POST', body: formData });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Upload failed');
+    return data;
+  }
+
+  async saveTabPreferences(courseId, enabledTabs) {
+    return this.request('/profile/lms/tab-preferences', {
+      method: 'POST',
+      body: JSON.stringify({ course_id: courseId, enabled_tabs: enabledTabs }),
+    });
   }
 
   // Voice transcription

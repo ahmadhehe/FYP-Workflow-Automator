@@ -18,9 +18,16 @@ const providers = [
   { id: 'gemini', name: 'Google Gemini', description: 'Gemini 2.5 Flash' },
 ];
 
-export function TaskInput({ onSubmit, isRunning, onStop }) {
+export function TaskInput({ onSubmit, isRunning, onStop, injectedPrompt }) {
   const [instruction, setInstruction] = useState('');
   const [initialUrl, setInitialUrl] = useState('');
+
+  // Fill the textarea when a quick-action prompt is injected
+  React.useEffect(() => {
+    if (injectedPrompt) {
+      setInstruction(injectedPrompt);
+    }
+  }, [injectedPrompt]);
   const [provider, setProvider] = useState(() => localStorage.getItem('defaultProvider') || 'openai');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState([]); // [{file, content, path}]

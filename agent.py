@@ -298,7 +298,15 @@ class BrowserAgent:
             elif tool_name == 'uploadFileToBrowser':
                 node_id = int(arguments['nodeId'])
                 file_name = arguments['fileName']
+                # Exact match first
                 file_path = self.uploaded_file_paths.get(file_name)
+                if not file_path:
+                    # Fuzzy match: find any registered file whose name contains the search term
+                    search = file_name.lower().replace('.pdf', '').strip()
+                    for registered_name, registered_path in self.uploaded_file_paths.items():
+                        if search in registered_name.lower() or registered_name.lower().replace('.pdf', '') in search:
+                            file_path = registered_path
+                            break
                 if not file_path:
                     available = list(self.uploaded_file_paths.keys())
                     return {'error': f'File "{file_name}" not found. Available files: {available}'}
