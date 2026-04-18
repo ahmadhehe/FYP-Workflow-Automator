@@ -23,8 +23,7 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
   const [initialUrl, setInitialUrl] = useState('');
   const [provider, setProvider] = useState(() => localStorage.getItem('defaultProvider') || 'openai');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [uploadedFile, setUploadedFile] = useState(null);
-  const [fileContent, setFileContent] = useState(null);
+  const [uploadedFiles, setUploadedFiles] = useState([]); // [{file, content, path}]
   const [isUploading, setIsUploading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef(null);
@@ -32,54 +31,52 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
   const finalTranscriptRef = useRef('');
 
   const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
 
-    // Check file size (limit to 10MB)
     const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-    if (file.size > MAX_FILE_SIZE) {
-      alert(`File is too large. Maximum size is 10MB. Your file is ${(file.size / 1024 / 1024).toFixed(2)}MB`);
-      return;
-    }
+    const MAX_CHARS = 50000;
 
     setIsUploading(true);
+    const newEntries = [];
 
-    try {
-      // Check if it's a PDF
-      if (file.name.toLowerCase().endsWith('.pdf')) {
-        // Use backend to parse PDF
-        const result = await api.uploadFile(file);
-        setUploadedFile(file);
-        setFileContent(result.file_content);
-      } else {
-        // Handle text files on client side
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          let content = event.target.result;
-
-          // Truncate if content is too long (keep first 50,000 characters)
-          const MAX_CHARS = 50000;
-          if (content.length > MAX_CHARS) {
-            content = content.substring(0, MAX_CHARS) + '\n\n[... Content truncated due to length ...]';
-          }
-
-          setFileContent(content);
-          setUploadedFile(file);
-        };
-        reader.readAsText(file);
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE) {
+        alert(`"${file.name}" is too large (max 10MB). Skipping.`);
+        continue;
       }
-    } catch (error) {
-      alert(`Error uploading file: ${error.message}`);
-      setUploadedFile(null);
-      setFileContent(null);
-    } finally {
-      setIsUploading(false);
+      try {
+        if (file.name.toLowerCase().endsWith('.pdf')) {
+          const result = await api.uploadFile(file);
+          newEntries.push({ file, content: result.file_content, path: result.file_path });
+        } else {
+          const content = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              let text = ev.target.result;
+              if (text.length > MAX_CHARS) text = text.substring(0, MAX_CHARS) + '\n\n[... Content truncated ...]';
+              resolve(text);
+            };
+            reader.onerror = reject;
+            reader.readAsText(file);
+          });
+          // Also save to backend to get a disk path for browser upload
+          const result = await api.uploadFile(file);
+          newEntries.push({ file, content, path: result.file_path });
+        }
+      } catch (error) {
+        alert(`Error uploading "${file.name}": ${error.message}`);
+      }
     }
+
+    setUploadedFiles(prev => [...prev, ...newEntries]);
+    setIsUploading(false);
+    // Reset input so the same file can be re-selected
+    e.target.value = '';
   };
 
-  const removeFile = () => {
-    setUploadedFile(null);
-    setFileContent(null);
+  const removeFile = (index) => {
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
   const startRecording = () => {
@@ -152,8 +149,7 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
       instruction: instruction.trim(),
       initialUrl: initialUrl.trim() || null,
       provider,
-      fileContent: fileContent,
-      fileName: uploadedFile?.name || null
+      files: uploadedFiles.map(f => ({ name: f.file.name, content: f.content, path: f.path }))
     });
   };
 
@@ -207,48 +203,54 @@ export function TaskInput({ onSubmit, isRunning, onStop }) {
 
         {/* File Upload Section */}
         <div>
-          <label className="label">Attach File (optional)</label>
-          {!uploadedFile ? (
-            <label className="flex items-center justify-center w-full h-24 px-4 transition bg-white border-2 border-gray-300 border-dashed rounded-lg cursor-pointer hover:bg-gray-50 hover:border-maroon-400">
-              <div className="flex flex-col items-center space-y-2">
-                <DocumentPlusIcon className="w-8 h-8 text-gray-400" />
-                <span className="text-sm text-gray-500">
-                  {isUploading ? 'Uploading...' : 'Click to upload a file for context'}
-                </span>
-                <span className="text-xs text-gray-400">
-                  PDF, Text files, CSV, JSON, etc. (Max 10MB)
-                </span>
-              </div>
-              <input
-                type="file"
-                className="hidden"
-                onChange={handleFileUpload}
-                disabled={isRunning || isUploading}
-                accept=".txt,.csv,.json,.md,.log,.xml,.html,.js,.py,.java,.c,.cpp,.h,.css,.yaml,.yml,.pdf"
-              />
-            </label>
-          ) : (
-            <div className="flex items-center justify-between p-4 bg-maroon-50 border border-maroon-200 rounded-lg">
-              <div className="flex items-center gap-3">
-                <DocumentPlusIcon className="w-6 h-6 text-maroon-600" />
-                <div>
-                  <div className="font-medium text-maroon-900">{uploadedFile.name}</div>
-                  <div className="text-sm text-maroon-600">
-                    {(uploadedFile.size / 1024).toFixed(2)} KB
-                    {uploadedFile.name.toLowerCase().endsWith('.pdf') && ' (PDF parsed)'}
+          <label className="label">Attach Files (optional)</label>
+
+          {/* Uploaded file list */}
+          {uploadedFiles.length > 0 && (
+            <div className="space-y-2 mb-2">
+              {uploadedFiles.map((entry, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-maroon-50 border border-maroon-200 rounded-lg">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <DocumentPlusIcon className="w-5 h-5 text-maroon-600 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="font-medium text-maroon-900 truncate">{entry.file.name}</div>
+                      <div className="text-xs text-maroon-600">
+                        {(entry.file.size / 1024).toFixed(1)} KB
+                        {entry.file.name.toLowerCase().endsWith('.pdf') && ' · PDF parsed'}
+                      </div>
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(i)}
+                    disabled={isRunning}
+                    className="p-1 hover:bg-maroon-200 rounded transition-colors shrink-0"
+                  >
+                    <XMarkIcon className="w-4 h-4 text-maroon-700" />
+                  </button>
                 </div>
-              </div>
-              <button
-                type="button"
-                onClick={removeFile}
-                disabled={isRunning}
-                className="p-1 hover:bg-maroon-200 rounded transition-colors"
-              >
-                <XMarkIcon className="w-5 h-5 text-maroon-700" />
-              </button>
+              ))}
             </div>
           )}
+
+          {/* Add more files button */}
+          <label className="flex items-center justify-center w-full h-20 px-4 transition bg-white border-2 border-gray-300 border-dashed rounded-lg cursor-pointer hover:bg-gray-50 hover:border-maroon-400">
+            <div className="flex flex-col items-center space-y-1">
+              <DocumentPlusIcon className="w-7 h-7 text-gray-400" />
+              <span className="text-sm text-gray-500">
+                {isUploading ? 'Uploading...' : uploadedFiles.length > 0 ? 'Add more files' : 'Click to attach files for context or upload'}
+              </span>
+              <span className="text-xs text-gray-400">PDF, TXT, CSV, JSON, etc. · Max 10MB each</span>
+            </div>
+            <input
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleFileUpload}
+              disabled={isRunning || isUploading}
+              accept=".txt,.csv,.json,.md,.log,.xml,.html,.js,.py,.java,.c,.cpp,.h,.css,.yaml,.yml,.pdf"
+            />
+          </label>
         </div>
 
         {/* Advanced options toggle */}

@@ -97,6 +97,11 @@ class LLMClient:
 
 Be decisive. If you see a "Next" button, click it. Don't keep scrolling looking for more content.
 
+**FILE UPLOAD TO WEBSITES:**
+If the user has attached files (shown in the conversation as [Attached Files]), you can physically upload those files to websites that have file input fields.
+- **uploadFileToBrowser(nodeId, fileName)** - Upload one of the user's attached files to a `<input type="file">` element. First use getInteractiveSnapshot to find the file input's nodeId, then call this tool with the exact fileName as it appears in [Attached Files].
+- **CRITICAL POST-UPLOAD STEP**: After uploadFileToBrowser succeeds, ALWAYS call getInteractiveSnapshot and look for a confirmation button such as "Upload", "Attach", "Add", "Continue", or "Done". Many sites (especially LMS platforms like Sakai, Canvas, Moodle) do NOT attach the file until you click this confirm button. If you see such a button, click it immediately.
+
 **GOOGLE SHEETS API TOOLS:**
 You have direct API access to Google Sheets (if the user has connected their Google account). These are MUCH faster and more reliable than manipulating sheets through the browser.
 
@@ -1028,6 +1033,32 @@ From `https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74
                             }
                         },
                         'required': ['spreadsheetId', 'requests']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'uploadFileToBrowser',
+                    'description': (
+                        "Upload one of the user's attached files to a file input element on the current page. "
+                        "Use this when a website has a file upload button (<input type=\"file\"> or a \"Choose file\" / \"Browse\" button) "
+                        "and you need to attach a file the user provided. "
+                        "First call getInteractiveSnapshot to find the file input's nodeId, then call this tool."
+                    ),
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'nodeId': {
+                                'type': 'integer',
+                                'description': 'The nodeId of the file input element from getInteractiveSnapshot'
+                            },
+                            'fileName': {
+                                'type': 'string',
+                                'description': "The exact file name to upload — must match one of the names listed in [Attached Files] in the conversation"
+                            }
+                        },
+                        'required': ['nodeId', 'fileName']
                     }
                 }
             }

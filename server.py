@@ -31,6 +31,9 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+
 # ============================================================================
 # LLM Interaction Logging Setup
 # ============================================================================
@@ -162,8 +165,9 @@ class TaskRequest(BaseModel):
     initial_url: Optional[str] = None
     provider: Optional[str] = None
     flow_id: Optional[str] = None
-    file_content: Optional[str] = None
-    file_name: Optional[str] = None
+    file_content: Optional[str] = None  # legacy single-file support
+    file_name: Optional[str] = None     # legacy single-file support
+    files: Optional[List[Dict[str, str]]] = None  # multi-file: [{name, content, path}]
 
 class TaskResponse(BaseModel):
     success: bool
@@ -304,7 +308,8 @@ async def run_agent_task(
     flow_id: str,
     emitter: EventEmitter,
     file_context: Optional[str] = None,
-    file_name: Optional[str] = None
+    file_name: Optional[str] = None,
+    files: Optional[List[Dict[str, str]]] = None
 ):
     """Run agent task with event emission"""
     global agent, current_task
@@ -332,14 +337,23 @@ async def run_agent_task(
         llm_logger.info(f"Starting workflow: {instruction}")
         llm_logger.info(f"Provider: {provider}")
         llm_logger.info(f"Initial URL: {initial_url}")
-        if file_context:
+        if files:
+            for f in files:
+                llm_logger.info(f"File attached: {f.get('name')} ({len(f.get('content', ''))} chars)")
+            llm_logger.info("")
+        elif file_context:
             llm_logger.info(f"File attached: {file_name}")
             llm_logger.info(f"File content length: {len(file_context)} characters\n")
         else:
             llm_logger.info("")
-        
+
+        # Set uploaded file paths on agent so the browser tool can use them
+        agent.uploaded_file_paths = {
+            f['name']: f['path'] for f in (files or []) if f.get('path')
+        }
+
         # Run the agent in a thread pool to avoid blocking the event loop
-        result = await run_agent_with_events(agent, instruction, initial_url, emitter, llm_logger, file_context, file_name)
+        result = await run_agent_with_events(agent, instruction, initial_url, emitter, llm_logger, file_context, file_name, files)
         
         await emitter.emit("status", {"message": "Task completed", "status": "completed"})
         
@@ -410,7 +424,8 @@ async def run_agent_with_events(
     emitter: EventEmitter,
     llm_logger: logging.Logger = None,
     file_context: Optional[str] = None,
-    file_name: Optional[str] = None
+    file_name: Optional[str] = None,
+    files: Optional[List[Dict[str, str]]] = None
 ) -> str:
     """Run agent with event emission for each action"""
     import json as json_module
@@ -434,8 +449,18 @@ async def run_agent_with_events(
     
     # Build user message with optional file context
     user_message = instruction
-    if file_context:
-        user_message = f"{instruction}\\n\\n[File Context Provided by User ({file_name})]:\\n{file_context}"
+    if files:
+        parts = [f"[File {i+1}: {f['name']}]\n{f.get('content', '')}" for i, f in enumerate(files)]
+        user_message = f"{instruction}\n\n[Attached Files]\n" + "\n\n".join(parts)
+        for f in files:
+            await emitter.emit("action", {
+                "type": "file_attached",
+                "message": f"File attached: {f['name']}",
+                "file_name": f['name'],
+                "iteration": 0
+            })
+    elif file_context:
+        user_message = f"{instruction}\n\n[File Context Provided by User ({file_name})]:\n{file_context}"
         await emitter.emit("action", {
             "type": "file_attached",
             "message": f"File attached: {file_name}",
@@ -802,6 +827,12 @@ async def upload_file(file: UploadFile = File(...)):
     """Upload and parse a file (supports PDF and text files)"""
     try:
         content = await file.read()
+
+        # Save original bytes to disk so the agent can upload the file to websites
+        saved_name = f"{uuid.uuid4()}_{file.filename}"
+        saved_path = UPLOAD_DIR / saved_name
+        saved_path.write_bytes(content)
+
         file_content = ""
         
         # Check if it's a PDF
@@ -859,6 +890,7 @@ async def upload_file(file: UploadFile = File(...)):
             "success": True,
             "file_name": file.filename,
             "file_content": file_content,
+            "file_path": str(saved_path.resolve()),
             "content_length": len(file_content),
             "is_pdf": file.filename.lower().endswith('.pdf')
         }
@@ -984,7 +1016,8 @@ async def run_task(request: TaskRequest, background_tasks: BackgroundTasks):
         flow_id=flow_id,
         emitter=emitter,
         file_context=request.file_content,
-        file_name=request.file_name
+        file_name=request.file_name,
+        files=request.files
     )
     
     return TaskResponse(

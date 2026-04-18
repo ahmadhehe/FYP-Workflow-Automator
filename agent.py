@@ -22,6 +22,7 @@ class BrowserAgent:
         self.google_sheets = google_sheets_client  # Optional Google Sheets client
         self.conversation_history: List[Dict[str, Any]] = []
         self.max_iterations = 45
+        self.uploaded_file_paths: Dict[str, str] = {}  # filename → disk path
         
         # Token tracking for current workflow
         self.total_input_tokens = 0
@@ -294,6 +295,17 @@ class BrowserAgent:
                 print(f"    ✓ Format cells {'succeeded' if result.get('success') else 'failed'}")
                 return result
                 
+            elif tool_name == 'uploadFileToBrowser':
+                node_id = int(arguments['nodeId'])
+                file_name = arguments['fileName']
+                file_path = self.uploaded_file_paths.get(file_name)
+                if not file_path:
+                    available = list(self.uploaded_file_paths.keys())
+                    return {'error': f'File "{file_name}" not found. Available files: {available}'}
+                result = self.browser.upload_file_to_input(node_id, file_path)
+                print(f"    ✓ File upload to browser {'succeeded' if result.get('success') else 'failed'}")
+                return result
+
             else:
                 error = f"Unknown tool: {tool_name}"
                 print(f"    ✗ {error}")

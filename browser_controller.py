@@ -1012,6 +1012,78 @@ class BrowserController:
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
+    def upload_file_to_input(self, node_id: int, file_path: str) -> Dict[str, Any]:
+        """Upload a local file to a <input type='file'> element identified by nodeId.
+
+        After calling this, the LLM should check the page for a confirmation button
+        (e.g. 'Upload', 'Attach', 'Done') and click it — many sites require an explicit
+        confirm step before the file is truly attached.
+        """
+        try:
+            if not os.path.exists(file_path):
+                return {'success': False, 'error': f'File not found on disk: {file_path}'}
+
+            snapshot = self.snapshot_cache.get('latest')
+            if not snapshot:
+                return {'success': False, 'error': 'No snapshot available. Call getInteractiveSnapshot first.'}
+
+            element = next((e for e in snapshot.get('elements', []) if e['nodeId'] == node_id), None)
+            if not element:
+                return {'success': False, 'error': f'Element with nodeId {node_id} not found in snapshot'}
+
+            # Collect all file inputs on the page (including hidden ones used by custom widgets)
+            file_inputs = self.page.locator('input[type="file"]')
+            count = file_inputs.count()
+            if count == 0:
+                return {'success': False, 'error': 'No <input type="file"> elements found on this page'}
+
+            # Try to match by accessible name / label text, then fall back to first input
+            label = element.get('name', '') or element.get('label', '') or element.get('text', '')
+            target = None
+            if label:
+                for i in range(count):
+                    inp = file_inputs.nth(i)
+                    try:
+                        aria = inp.get_attribute('aria-label') or ''
+                        id_attr = inp.get_attribute('id') or ''
+                        name_attr = inp.get_attribute('name') or ''
+                        if label.lower() in (aria + id_attr + name_attr).lower():
+                            target = inp
+                            break
+                    except Exception:
+                        pass
+
+            if target is None:
+                target = file_inputs.first
+
+            # Use Playwright's expect_file_chooser to handle sites that open a file picker
+            # dialog on button click. set_input_files works for both hidden inputs and choosers.
+            target.set_input_files(file_path)
+
+            # Dispatch change + input events explicitly — some JS frameworks (React, Vue, Sakai)
+            # do not react to programmatic value changes without these events
+            try:
+                target.dispatch_event('change')
+                target.dispatch_event('input')
+            except Exception:
+                pass
+
+            # Give the UI time to process the file selection
+            self.page.wait_for_timeout(1500)
+
+            file_name = os.path.basename(file_path)
+            return {
+                'success': True,
+                'message': (
+                    f'File "{file_name}" set on the file input. '
+                    'IMPORTANT: Many sites require an additional step — look for and click an '
+                    '"Upload", "Attach", "Add", "Continue", or "Done" button to confirm the upload. '
+                    'Call getInteractiveSnapshot to check what buttons are now available.'
+                ),
+            }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
     def get_element_state(self, node_id: int) -> Dict[str, Any]:
         """
         Get the current state of an element (checked, selected, value, etc.)

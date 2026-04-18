@@ -42,15 +42,14 @@ class ApiService {
   }
 
   // Task execution
-  async runTask(instruction, initialUrl = null, provider = null, fileContent = null, fileName = null) {
+  async runTask(instruction, initialUrl = null, provider = null, files = null) {
     return this.request('/task', {
       method: 'POST',
       body: JSON.stringify({
         instruction,
         initial_url: initialUrl,
         provider,
-        file_content: fileContent,
-        file_name: fileName
+        files: files && files.length > 0 ? files : null,
       }),
     });
   }

@@ -18,7 +18,7 @@ export function Dashboard({
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
 
-  const handleSubmit = useCallback(async ({ instruction, initialUrl, provider, fileContent, fileName }) => {
+  const handleSubmit = useCallback(async ({ instruction, initialUrl, provider, files }) => {
     // Clear previous state
     clearEvents();
     setResult(null);
@@ -26,7 +26,7 @@ export function Dashboard({
     setIsRunning(true);
 
     try {
-      const response = await api.runTask(instruction, initialUrl, provider, fileContent, fileName);
+      const response = await api.runTask(instruction, initialUrl, provider, files);
       
       if (response.success) {
         setResult(response.result);
