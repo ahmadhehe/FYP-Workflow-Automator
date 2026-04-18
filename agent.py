@@ -11,6 +11,80 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# Tool results that bloat quickly — only the latest is useful, prior ones reflect stale DOM.
+BLOATY_TOOLS = {'getInteractiveSnapshot', 'getPageContent'}
+
+# Tools that change what's visible / interactive on the page. After one of
+# these succeeds we piggyback a fresh slim snapshot onto the tool result so
+# the LLM doesn't have to spend another round-trip calling
+# getInteractiveSnapshot. Keep this list in sync with browser_controller
+# action methods.
+STATE_CHANGING_TOOLS = {
+    'click',
+    'clickByText',
+    'inputText',
+    'selectDate',
+    'selectDropdownOption',
+    'navigate',
+    'scrollDown',
+    'scrollUp',
+    'sendKeys',
+    'uploadFileToBrowser',
+    'goBack',
+    'goForward',
+    'reloadTab',
+    'switchToTab',
+    'openNewTab',
+    'closeTab',
+    'nextTab',
+    'previousTab',
+}
+
+
+def prune_history_for_llm(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Return a copy of history where old snapshot/page-content tool results are
+    replaced with short stubs. Keeps the most recent result of each bloaty tool
+    intact so the LLM still has current page context.
+
+    Non-bloaty tool results (click, input, navigate, sheets API, etc.) are
+    preserved — they are small and causally important for reasoning.
+    """
+    # Map tool_call_id -> function name so we can classify tool results.
+    call_id_to_name: Dict[str, str] = {}
+    for msg in history:
+        for tc in msg.get('tool_calls') or []:
+            call_id_to_name[tc['id']] = tc['function']['name']
+
+    # Indices of bloaty tool results, grouped by function name.
+    bloaty_by_fn: Dict[str, List[int]] = {}
+    for i, msg in enumerate(history):
+        if msg.get('role') != 'tool':
+            continue
+        fn = call_id_to_name.get(msg.get('tool_call_id'))
+        if fn in BLOATY_TOOLS:
+            bloaty_by_fn.setdefault(fn, []).append(i)
+
+    # Keep the last occurrence of each bloaty fn; mark the rest for elision.
+    elide_indices = set()
+    for fn, indices in bloaty_by_fn.items():
+        for i in indices[:-1]:
+            elide_indices.add(i)
+
+    if not elide_indices:
+        return history
+
+    pruned: List[Dict[str, Any]] = []
+    for i, msg in enumerate(history):
+        if i in elide_indices:
+            fn = call_id_to_name.get(msg.get('tool_call_id'), 'tool')
+            stub = {'elided': f'Prior {fn} result omitted. Call {fn} again if you need the current page state.'}
+            pruned.append({**msg, 'content': json.dumps(stub)})
+        else:
+            pruned.append(msg)
+    return pruned
+
+
 class BrowserAgent:
     def __init__(self, provider: str = None, headless: bool = False, use_profile: bool = True, google_sheets_client=None):
         """Initialize the browser agent"""
@@ -59,6 +133,27 @@ class BrowserAgent:
         self.browser.close()
     
     def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+        """Execute a tool call from the LLM, auto-attaching a fresh snapshot
+        to successful state-changing actions so the LLM can see the new page
+        state without a separate getInteractiveSnapshot round-trip."""
+        result = self._execute_tool_impl(tool_name, arguments)
+
+        if tool_name in STATE_CHANGING_TOOLS and isinstance(result, dict) \
+                and result.get('success') and not result.get('error'):
+            try:
+                snap = self.browser.get_interactive_snapshot(viewport_only=True)
+                if snap and snap.get('elements'):
+                    result['_snapshot'] = {
+                        'snapshotId': snap.get('snapshotId'),
+                        'elementCount': snap.get('elementCount'),
+                        'elements': snap.get('elements'),
+                    }
+            except Exception as e:
+                # Auto-snapshot is a convenience; never let it fail the action.
+                print(f"    ⚠️  auto-snapshot after {tool_name} failed: {e}")
+        return result
+
+    def _execute_tool_impl(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """Execute a tool call from the LLM"""
         print(f"  🔧 Executing: {tool_name}({arguments})")
         
@@ -365,10 +460,10 @@ class BrowserAgent:
         for iteration in range(self.max_iterations):
             print(f"\n--- Iteration {iteration + 1}/{self.max_iterations} ---")
             
-            # Call LLM
+            # Call LLM with pruned history — keeps context flat across iterations.
             try:
                 response = self.llm.chat_completion(
-                    messages=self.conversation_history,
+                    messages=prune_history_for_llm(self.conversation_history),
                     tools=tools,
                     tool_choice='auto'
                 )

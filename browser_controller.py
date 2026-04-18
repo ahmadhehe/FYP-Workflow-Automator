@@ -154,16 +154,15 @@ class BrowserController:
             # Wait for body to be visible with longer timeout
             try:
                 self.page.wait_for_selector('body', state='visible', timeout=15000)
-            except:
+            except Exception:
                 pass  # Some pages may not have body immediately visible
-            
-            # Give additional time for JavaScript to initialize
-            self.page.wait_for_timeout(1000)
-            
-            # Wait for any pending navigation
+
+            # Wait for any pending navigation. The auto-snapshot path runs
+            # _wait_for_page_ready afterwards, which covers JS init, so we
+            # skip the extra fixed 1s sleep.
             try:
                 self.page.wait_for_load_state('domcontentloaded', timeout=10000)
-            except:
+            except Exception:
                 pass  # Continue even if this times out
             
             return {
@@ -176,272 +175,275 @@ class BrowserController:
     
     def get_interactive_snapshot(self, viewport_only: bool = True) -> Dict[str, Any]:
         """
-        Get snapshot of interactive elements on the page
-        Uses both accessibility tree AND DOM queries for better coverage
+        Get snapshot of interactive elements on the page via DOM query.
+
+        Single source of truth: we walk the DOM (not the AX tree) because the AX
+        tree API was removed from Playwright ≥1.56 and because DOM coverage is
+        more predictable across page shapes (forms, link-heavy portals, SPAs).
         """
         try:
-            # Wait for page to be ready
             self._wait_for_page_ready()
-            
-            # Get accessibility tree with retry logic
-            snapshot = self._get_accessibility_snapshot_with_retry()
-            
-            interactive_elements = []
-            node_id = 0
-            seen_elements = set()  # Track elements to avoid duplicates
-            
-            def extract_interactive(node: Dict, depth: int = 0):
-                nonlocal node_id
-                
-                role = node.get('role', '')
-                name = node.get('name', '')
-                value = node.get('value', '')
-                
-                # Determine if element is interactive
-                clickable_roles = [
-                    'button', 'link', 'checkbox', 'radio', 'menuitem', 
-                    'tab', 'switch', 'option', 'treeitem'
+
+            interactive_elements = self._get_dom_interactive_elements()
+
+            # Viewport filter (server-side — the JS pass already checks visibility)
+            if viewport_only:
+                interactive_elements = [
+                    e for e in interactive_elements
+                    if e.get('rect') and self._is_in_viewport(e['rect'])
                 ]
-                typeable_roles = ['textbox', 'searchbox', 'combobox', 'spinbutton']
-                selectable_roles = ['listbox', 'combobox', 'menu']
-                
-                is_clickable = role in clickable_roles
-                is_typeable = role in typeable_roles
-                is_selectable = role in selectable_roles
-                
-                if is_clickable or is_typeable or is_selectable:
-                    element_type = (
-                        'clickable' if is_clickable 
-                        else 'typeable' if is_typeable 
-                        else 'selectable'
-                    )
-                    
-                    # Try to get bounding box
-                    rect = None
-                    try:
-                        if name:
-                            # Try to locate element
-                            locators = [
-                                self.page.get_by_role(role, name=name, exact=False),
-                                self.page.get_by_text(name, exact=False),
-                                self.page.get_by_label(name, exact=False)
-                            ]
-                            
-                            for locator in locators:
-                                try:
-                                    if locator.count() > 0:
-                                        rect = locator.first.bounding_box(timeout=1000)
-                                        if rect:
-                                            break
-                                except:
-                                    continue
-                    except:
-                        pass
-                    
-                    element_info = {
-                        'nodeId': node_id,
-                        'type': element_type,
-                        'name': name,
-                        'role': role,
-                        'rect': rect,
-                        'attributes': {
-                            'value': value,
-                            'description': node.get('description', ''),
-                            'depth': depth
-                        }
-                    }
-                    
-                    # Filter by viewport if requested
-                    if not viewport_only or (rect and self._is_in_viewport(rect)):
-                        # Create a key to track this element
-                        elem_key = f"{role}:{name}:{rect}" if rect else f"{role}:{name}"
-                        if elem_key not in seen_elements:
-                            seen_elements.add(elem_key)
-                            interactive_elements.append(element_info)
-                            node_id += 1
-                
-                # Recurse through children
-                for child in node.get('children', []):
-                    extract_interactive(child, depth + 1)
-            
-            if snapshot:
-                extract_interactive(snapshot)
-            
-            # ALSO query DOM directly for form inputs that accessibility tree might miss
-            # This is crucial for Google Forms and other custom form implementations
-            dom_inputs = self._get_dom_form_elements()
-            for dom_elem in dom_inputs:
-                elem_key = f"{dom_elem['role']}:{dom_elem['name']}:{dom_elem.get('rect')}"
-                if elem_key not in seen_elements:
-                    dom_elem['nodeId'] = node_id
-                    interactive_elements.append(dom_elem)
-                    seen_elements.add(elem_key)
-                    node_id += 1
-            
-            # Generate hierarchical structure for context
-            hierarchical = self._build_hierarchy(interactive_elements)
-            
-            result = {
-                'snapshotId': int(time.time() * 1000),
+
+            # Assign nodeIds after filtering so they're contiguous
+            for idx, elem in enumerate(interactive_elements):
+                elem['nodeId'] = idx
+
+            snapshot_id = int(time.time() * 1000)
+
+            # Full record kept server-side — click/input/etc. need rect + full attrs
+            self.snapshot_cache['latest'] = {
+                'snapshotId': snapshot_id,
                 'timestamp': time.time(),
                 'elements': interactive_elements,
-                'hierarchicalStructure': hierarchical,
-                'processingTimeMs': 0
             }
-            
-            # Cache for later use
-            self.snapshot_cache['latest'] = result
-            
-            return result
-            
-        except Exception as e:
+
+            if not interactive_elements:
+                return {
+                    'success': False,
+                    'error': 'No interactive elements found in viewport.',
+                    'hint': 'Page may still be loading, or content is outside the viewport. Try viewportOnly=false, scroll, or wait briefly before retrying.',
+                    'elements': [],
+                }
+
+            # Slim payload returned to the LLM: drop rect, depth, description, empty values
+            slim_elements = []
+            for e in interactive_elements:
+                slim = {
+                    'nodeId': e['nodeId'],
+                    'type': e['type'],
+                    'role': e['role'],
+                    'name': e['name'],
+                }
+                val = (e.get('attributes') or {}).get('value')
+                if val:
+                    slim['value'] = val
+                slim_elements.append(slim)
+
             return {
+                'snapshotId': snapshot_id,
+                'elementCount': len(slim_elements),
+                'elements': slim_elements,
+            }
+
+        except Exception as e:
+            logger.warning("get_interactive_snapshot failed: %s", e)
+            return {
+                'success': False,
                 'error': str(e),
+                'hint': 'Page may be navigating. Wait briefly and retry getInteractiveSnapshot.',
                 'elements': []
             }
     
-    def _get_dom_form_elements(self) -> List[Dict]:
+    def _get_dom_interactive_elements(self) -> List[Dict]:
         """
-        Query DOM directly for form elements that accessibility tree might miss.
-        Essential for Google Forms and other custom form implementations.
+        Single DOM pass that collects every interactive element on the page:
+        form fields, links, buttons, and anything carrying an interactive ARIA
+        role or click affordance. Visibility-filtered (rect > 0, not hidden).
         """
         try:
-            # JavaScript to find form inputs - much more comprehensive for Google Forms
-            form_elements = self.page.evaluate('''() => {
+            raw_elements = self.page.evaluate('''() => {
                 const results = [];
                 const seenRects = new Set();
-                
+                const seenEls = new WeakSet();
+
+                const CLICKABLE_ROLES = new Set([
+                    'button', 'link', 'checkbox', 'radio', 'switch',
+                    'menuitem', 'menuitemcheckbox', 'menuitemradio',
+                    'tab', 'option', 'treeitem', 'gridcell'
+                ]);
+                const TYPEABLE_ROLES = new Set([
+                    'textbox', 'searchbox', 'spinbutton'
+                ]);
+                const SELECTABLE_ROLES = new Set([
+                    'combobox', 'listbox', 'menu'
+                ]);
+
+                function isVisible(el, rect) {
+                    if (rect.width < 4 || rect.height < 4) return false;
+                    const style = window.getComputedStyle(el);
+                    if (style.visibility === 'hidden' || style.display === 'none') return false;
+                    if (parseFloat(style.opacity) < 0.05) return false;
+                    return true;
+                }
+
+                function computeName(el, labelOverride) {
+                    if (labelOverride) return labelOverride;
+
+                    const aria = el.getAttribute('aria-label');
+                    if (aria) return aria.trim();
+
+                    const labelledby = el.getAttribute('aria-labelledby');
+                    if (labelledby) {
+                        const ref = document.getElementById(labelledby.split(/\\s+/)[0]);
+                        if (ref && ref.textContent) return ref.textContent.trim();
+                    }
+
+                    if (el.id) {
+                        const lbl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+                        if (lbl && lbl.textContent) return lbl.textContent.trim();
+                    }
+
+                    const closestLabel = el.closest('label');
+                    if (closestLabel && closestLabel.textContent) {
+                        return closestLabel.textContent.trim();
+                    }
+
+                    const placeholder = el.getAttribute('placeholder') || el.getAttribute('data-placeholder');
+                    if (placeholder) return placeholder.trim();
+
+                    // For links/buttons, prefer visible text
+                    if (el.tagName === 'A' || el.tagName === 'BUTTON' ||
+                        ['button', 'link', 'menuitem', 'tab'].includes(el.getAttribute('role'))) {
+                        const text = (el.innerText || el.textContent || '').trim();
+                        if (text) return text;
+                        const title = el.getAttribute('title');
+                        if (title) return title.trim();
+                        const img = el.querySelector('img[alt]');
+                        if (img) return (img.getAttribute('alt') || '').trim();
+                    }
+
+                    return (el.getAttribute('name') ||
+                            el.getAttribute('title') ||
+                            el.value ||
+                            '').toString().trim();
+                }
+
+                function resolveRole(el) {
+                    const explicit = el.getAttribute('role');
+                    if (explicit) return explicit;
+
+                    const tag = el.tagName;
+                    if (tag === 'A' && el.hasAttribute('href')) return 'link';
+                    if (tag === 'BUTTON') return 'button';
+                    if (tag === 'SELECT') return 'combobox';
+                    if (tag === 'TEXTAREA') return 'textbox';
+                    if (tag === 'INPUT') {
+                        const t = (el.type || 'text').toLowerCase();
+                        if (t === 'checkbox') return 'checkbox';
+                        if (t === 'radio') return 'radio';
+                        if (t === 'submit' || t === 'button' || t === 'reset') return 'button';
+                        if (t === 'search') return 'searchbox';
+                        return 'textbox';
+                    }
+                    if (el.hasAttribute('contenteditable')) return 'textbox';
+                    return '';
+                }
+
                 function addElement(el, labelOverride = null) {
+                    if (seenEls.has(el)) return;
                     const rect = el.getBoundingClientRect();
-                    // Skip invisible or too small elements
-                    if (rect.width < 10 || rect.height < 10) return;
-                    
-                    // Skip if we've already seen this position
-                    const rectKey = `${Math.round(rect.x)},${Math.round(rect.y)}`;
+                    if (!isVisible(el, rect)) return;
+
+                    const rectKey = `${Math.round(rect.x)},${Math.round(rect.y)},${Math.round(rect.width)},${Math.round(rect.height)}`;
                     if (seenRects.has(rectKey)) return;
+
+                    const role = resolveRole(el);
+                    if (!role) return;
+
+                    seenEls.add(el);
                     seenRects.add(rectKey);
-                    
-                    const type = el.type || el.getAttribute('data-type') || el.tagName.toLowerCase();
-                    
-                    // Try multiple ways to get the label/name
-                    let name = labelOverride ||
-                               el.getAttribute('aria-label') || 
-                               el.getAttribute('placeholder') ||
-                               el.getAttribute('data-placeholder') ||
-                               el.getAttribute('name') ||
-                               el.getAttribute('data-params')?.match(/"([^"]+)"/)?.[1] ||
-                               '';
-                    
-                    // Try to find label from parent structure (Google Forms)
-                    if (!name) {
-                        const parent = el.closest('[role="listitem"], [data-params]');
-                        if (parent) {
-                            const heading = parent.querySelector('[role="heading"]');
-                            if (heading) name = heading.textContent?.trim() || '';
-                        }
-                    }
-                    
-                    // Try nearby label
-                    if (!name) {
-                        const closestLabel = el.closest('label');
-                        if (closestLabel) name = closestLabel.textContent?.trim() || '';
-                    }
-                    
+
+                    const name = (computeName(el, labelOverride) || '').substring(0, 120);
+                    const inputType = (el.type || '').toLowerCase();
+
                     results.push({
                         tagName: el.tagName.toLowerCase(),
-                        type: type,
-                        name: (name || 'unnamed').substring(0, 100),
-                        value: el.value || el.textContent?.substring(0, 50) || '',
+                        role,
+                        name,
+                        inputType,
+                        value: (el.value || '').toString().substring(0, 80),
                         rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-                        isDate: type === 'date' || 
-                                name.toLowerCase().includes('date') || 
-                                name.toLowerCase().includes('birth') ||
-                                name.toLowerCase().includes('dob'),
-                        checked: el.checked || el.getAttribute('aria-checked') === 'true',
-                        role: el.getAttribute('role') || ''
+                        checked: el.checked === true || el.getAttribute('aria-checked') === 'true',
+                        isDate: inputType === 'date' ||
+                                /date|birth|dob/i.test(name)
                     });
                 }
-                
-                // 1. Standard form elements
+
+                // 1. Form controls
                 document.querySelectorAll('input, textarea, select').forEach(el => addElement(el));
-                
-                // 2. Contenteditable elements (often used for text input)
-                document.querySelectorAll('[contenteditable="true"]').forEach(el => addElement(el));
-                
-                // 3. Elements with specific ARIA roles (critical for Google Forms)
-                document.querySelectorAll('[role="textbox"], [role="combobox"], [role="listbox"], [role="option"], [role="radio"], [role="checkbox"]').forEach(el => addElement(el));
-                
-                // 4. Google Forms specific: data-value inputs
-                document.querySelectorAll('[data-value], [data-answer-value]').forEach(el => addElement(el));
-                
-                // 5. Google Forms question containers - find clickable areas
+
+                // 2. Links and buttons (post-login pages are mostly these)
+                document.querySelectorAll('a[href], button').forEach(el => addElement(el));
+
+                // 3. Elements with interactive ARIA roles
+                const roleSelector = [...CLICKABLE_ROLES, ...TYPEABLE_ROLES, ...SELECTABLE_ROLES]
+                    .map(r => `[role="${r}"]`).join(',');
+                document.querySelectorAll(roleSelector).forEach(el => addElement(el));
+
+                // 4. Contenteditable + tabindex-based interactives
+                document.querySelectorAll('[contenteditable="true"], [contenteditable=""]').forEach(el => addElement(el));
+                document.querySelectorAll('[tabindex="0"], [onclick]').forEach(el => {
+                    if ((el.innerText || el.textContent || '').trim()) addElement(el);
+                });
+
+                // 5. Google-Forms / Sakai-style labelled question containers
                 document.querySelectorAll('[role="listitem"]').forEach(container => {
-                    // Get the question label
                     const heading = container.querySelector('[role="heading"]');
                     const label = heading?.textContent?.trim() || '';
-                    
-                    // Find all interactive elements within
-                    container.querySelectorAll('input, textarea, [role="textbox"], [role="listbox"], [role="combobox"], [data-value]').forEach(el => {
-                        addElement(el, label);
-                    });
-                    
-                    // For radio/checkbox groups, find the options
-                    container.querySelectorAll('[role="radio"], [role="checkbox"], [data-answer-value]').forEach(el => {
-                        const optionLabel = el.getAttribute('data-value') || el.getAttribute('aria-label') || el.textContent?.trim() || '';
-                        addElement(el, label + ': ' + optionLabel);
-                    });
+                    if (!label) return;
+                    container.querySelectorAll(
+                        'input, textarea, [role="textbox"], [role="listbox"], [role="combobox"], [role="radio"], [role="checkbox"], [data-value]'
+                    ).forEach(el => addElement(el, label));
                 });
-                
-                // 6. Clickable divs that look like buttons or dropdowns
-                document.querySelectorAll('[role="button"], [role="menuitem"], [tabindex="0"]').forEach(el => {
-                    const text = el.textContent?.trim() || '';
-                    // Skip navigation elements
-                    if (!text.match(/^(Next|Back|Submit|Previous|Clear|Cancel|Close)/i)) return;
-                    addElement(el, text);
-                });
-                
+
                 return results;
             }''')
-            
+
             # Convert to our element format
             result_elements = []
-            for elem in form_elements:
-                # Determine role
-                if elem['type'] == 'checkbox':
-                    role = 'checkbox'
+            for elem in raw_elements or []:
+                role = elem.get('role') or 'button'
+                input_type = (elem.get('inputType') or '').lower()
+                tag = elem.get('tagName', '')
+
+                if role in ('checkbox', 'radio', 'switch'):
                     elem_type = 'clickable'
-                elif elem['type'] == 'radio':
-                    role = 'radio'
-                    elem_type = 'clickable'
-                elif elem['type'] == 'date' or elem.get('isDate'):
-                    role = 'textbox'  # Date inputs
+                elif role in ('textbox', 'searchbox', 'spinbutton') and (input_type == 'date' or elem.get('isDate')):
                     elem_type = 'date-input'
-                elif elem['tagName'] == 'select':
-                    role = 'combobox'
-                    elem_type = 'selectable'
-                else:
-                    role = 'textbox'
+                elif role in ('textbox', 'searchbox', 'spinbutton'):
                     elem_type = 'typeable'
-                
+                elif role in ('combobox', 'listbox', 'menu'):
+                    elem_type = 'selectable'
+                elif role in ('button', 'link', 'menuitem', 'menuitemcheckbox', 'menuitemradio',
+                              'tab', 'option', 'treeitem', 'gridcell'):
+                    elem_type = 'clickable'
+                else:
+                    elem_type = 'clickable'
+
+                name = elem.get('name') or ''
+                if not name:
+                    # Skip truly nameless elements — they're not useful to the LLM
+                    continue
+
                 result_elements.append({
                     'type': elem_type,
-                    'name': elem['name'],
+                    'name': name,
                     'role': role,
-                    'rect': elem['rect'],
+                    'rect': elem.get('rect'),
                     'attributes': {
                         'value': elem.get('value', ''),
-                        'description': f"DOM element: {elem['tagName']}",
+                        'description': f"DOM element: {tag}",
                         'depth': 0,
                         'isDate': elem.get('isDate', False),
-                        'tagName': elem['tagName'],
-                        'inputType': elem['type']
+                        'tagName': tag,
+                        'inputType': input_type or role,
+                        'checked': elem.get('checked', False),
                     }
                 })
-            
+
             return result_elements
-            
+
         except Exception as e:
-            logger.warning("Error getting DOM form elements: %s", e)
+            logger.warning("Error getting DOM interactive elements: %s", e)
             return []
     
     def _is_in_viewport(self, rect: Dict) -> bool:
@@ -474,24 +476,25 @@ class BrowserController:
     def click(self, node_id: int, verify_action: bool = True) -> Dict[str, Any]:
         """
         Click on element by nodeId with optional state verification
-        
+
         Args:
             node_id: The nodeId to click
             verify_action: If True, checks element state before clicking to avoid double-toggles
         """
         try:
-            # Wait a bit for any animations to complete
-            self.page.wait_for_timeout(300)
-            
             snapshot = self.snapshot_cache.get('latest')
             if not snapshot:
-                return {'success': False, 'error': 'No snapshot available'}
-            
+                return {'success': False, 'error': 'No snapshot available. Call getInteractiveSnapshot first.'}
+
             # Find element
             element = next((e for e in snapshot['elements'] if e['nodeId'] == node_id), None)
             if not element:
-                return {'success': False, 'error': f'Element {node_id} not found'}
-            
+                return {
+                    'success': False,
+                    'error': f'nodeId {node_id} not in current snapshot.',
+                    'hint': 'Snapshot may be stale after DOM changed. Call getInteractiveSnapshot to refresh nodeIds.',
+                }
+
             # Check state before clicking if it's a toggle element
             pre_state = None
             if verify_action and element['role'] in ['checkbox', 'radio', 'switch']:
@@ -504,22 +507,25 @@ class BrowserController:
                         'skipped': True,
                         'state': pre_state
                     }
-            
-            # Try different click strategies
+
+            # Try different click strategies, recording why each fails
             clicked = False
-            
+            strategy_errors: Dict[str, str] = {}
+
             # Strategy 1: Click by role and name
             if element['name']:
                 try:
                     locator = self.page.get_by_role(element['role'], name=element['name'], exact=False)
                     if locator.count() > 0:
-                        # Wait for element to be stable before clicking
                         locator.first.wait_for(state='visible', timeout=5000)
                         locator.first.click(timeout=5000)
                         clicked = True
+                    else:
+                        strategy_errors['role_name'] = 'no match'
                 except Exception as e:
+                    strategy_errors['role_name'] = str(e)[:120]
                     print(f"    Strategy 1 failed: {e}")
-            
+
             # Strategy 2: Click by coordinates
             if not clicked and element['rect']:
                 try:
@@ -528,78 +534,106 @@ class BrowserController:
                     self.page.mouse.click(x, y)
                     clicked = True
                 except Exception as e:
+                    strategy_errors['coords'] = str(e)[:120]
                     print(f"    Strategy 2 failed: {e}")
-            
+
             # Strategy 3: Click by text
             if not clicked and element['name']:
                 try:
                     self.page.get_by_text(element['name'], exact=False).first.click(timeout=5000)
                     clicked = True
                 except Exception as e:
+                    strategy_errors['text'] = str(e)[:120]
                     print(f"    Strategy 3 failed: {e}")
-            
-            # Smart wait after click - wait for navigation or network idle
+
+            # Smart wait after click — short load-state poll; skip the long
+            # fallback sleep, since the auto-snapshot will trigger its own
+            # readiness wait anyway.
+            post_state = None
             if clicked:
                 try:
-                    # Wait for either navigation or network to settle (whichever comes first)
-                    self.page.wait_for_load_state('domcontentloaded', timeout=3000)
-                except:
-                    # If no navigation, just wait briefly for any changes
-                    self.page.wait_for_timeout(500)
-                
-                # Verify state changed if applicable
-                post_state = None
+                    self.page.wait_for_load_state('domcontentloaded', timeout=1000)
+                except Exception:
+                    pass
+
                 if verify_action and element['role'] in ['checkbox', 'radio', 'switch'] and pre_state:
                     post_state = self.get_element_state(node_id)
-            
-            result = {'success': clicked}
+
+            result: Dict[str, Any] = {'success': clicked}
+            if not clicked:
+                result['error'] = f'Could not click "{element["name"]}" ({element["role"]})'
+                result['strategies_tried'] = strategy_errors
+                result['hint'] = 'Element may have been removed or replaced. Try clickByText with its label, or refresh with getInteractiveSnapshot.'
             if pre_state:
                 result['pre_state'] = pre_state
-            if 'post_state' in locals() and post_state:
+            if post_state:
                 result['post_state'] = post_state
-            
+
             return result
-            
+
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
-    def input_text(self, node_id: int, text: str) -> Dict[str, bool]:
-        """Input text into element with verification"""
+    def input_text(self, node_id: int, text: str) -> Dict[str, Any]:
+        """Input text into element with verification and one retry on verify-fail."""
         try:
-            # Wait for any animations
-            self.page.wait_for_timeout(300)
-            
             snapshot = self.snapshot_cache.get('latest')
             if not snapshot:
-                return {'success': False, 'error': 'No snapshot available'}
-            
+                return {'success': False, 'error': 'No snapshot available. Call getInteractiveSnapshot first.'}
+
             element = next((e for e in snapshot['elements'] if e['nodeId'] == node_id), None)
             if not element:
-                return {'success': False, 'error': f'Element {node_id} not found'}
-            
-            # Try to find and fill the input
+                return {
+                    'success': False,
+                    'error': f'nodeId {node_id} not in current snapshot.',
+                    'hint': 'Snapshot may be stale. Call getInteractiveSnapshot to refresh nodeIds.',
+                }
+
+            def verify_value_set() -> Optional[bool]:
+                """Return True/False if we can verify, or None if we can't."""
+                if not element.get('rect'):
+                    return None
+                try:
+                    r = self.page.evaluate(f'''() => {{
+                        const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+                        for (const input of inputs) {{
+                            const rect = input.getBoundingClientRect();
+                            if (Math.abs(rect.x - {element['rect']['x']}) < 20 &&
+                                Math.abs(rect.y - {element['rect']['y']}) < 20) {{
+                                const value = input.value || input.textContent || '';
+                                return value.length > 0;
+                            }}
+                        }}
+                        return null;
+                    }}''')
+                    return None if r is None else bool(r)
+                except Exception:
+                    return None
+
             filled = False
-            
+            strategies_tried = []
+
             # Strategy 1: By role and name
             if element['name']:
                 try:
                     locator = self.page.get_by_role(element['role'], name=element['name'], exact=False)
                     if locator.count() > 0:
-                        # Wait for element to be ready
                         locator.first.wait_for(state='visible', timeout=5000)
                         locator.first.fill(text)
                         filled = True
-                except:
+                        strategies_tried.append('role_name')
+                except Exception:
                     pass
-            
+
             # Strategy 2: By label
             if not filled and element['name']:
                 try:
                     self.page.get_by_label(element['name'], exact=False).first.fill(text)
                     filled = True
-                except:
+                    strategies_tried.append('label')
+                except Exception:
                     pass
-            
+
             # Strategy 3: Click at coordinates then type
             if not filled and element['rect']:
                 try:
@@ -607,42 +641,53 @@ class BrowserController:
                     y = element['rect']['y'] + element['rect']['height'] / 2
                     self.page.mouse.click(x, y)
                     time.sleep(0.2)
-                    # Clear existing text first
                     self.page.keyboard.press('Control+A')
                     time.sleep(0.1)
                     self.page.keyboard.type(text)
                     filled = True
-                except:
+                    strategies_tried.append('click_type')
+                except Exception:
                     pass
-            
-            # Wait for any input event handlers to process
-            if filled:
-                self.page.wait_for_timeout(300)
-                
-                # VERIFY the text was actually entered
+
+            if not filled:
+                return {
+                    'success': False,
+                    'error': f'All input strategies failed for "{element["name"]}" ({element["role"]})',
+                    'hint': 'Field may be read-only or hidden. Try clicking it first, or refresh via getInteractiveSnapshot.',
+                }
+
+            # Allow input handlers to process, then verify.
+            self.page.wait_for_timeout(300)
+            verified = verify_value_set()
+
+            # If verification says the value didn't stick, retry once with click+type.
+            if verified is False and 'click_type' not in strategies_tried and element.get('rect'):
+                print(f"    ⚠️  Verification failed — retrying with click+type")
                 try:
-                    if element['rect']:
-                        verify_result = self.page.evaluate(f'''() => {{
-                            const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
-                            for (const input of inputs) {{
-                                const rect = input.getBoundingClientRect();
-                                if (Math.abs(rect.x - {element['rect']['x']}) < 20 && 
-                                    Math.abs(rect.y - {element['rect']['y']}) < 20) {{
-                                    const value = input.value || input.textContent || '';
-                                    return {{ value: value, hasValue: value.length > 0 }};
-                                }}
-                            }}
-                            return {{ value: '', hasValue: false }};
-                        }}''')
-                        
-                        if not verify_result.get('hasValue'):
-                            print(f"    ⚠️  Text verification failed - value may not be set")
-                            # Don't fail completely, but warn
-                except Exception as verify_err:
-                    print(f"    Verification check error: {verify_err}")
-            
-            return {'success': filled}
-            
+                    x = element['rect']['x'] + element['rect']['width'] / 2
+                    y = element['rect']['y'] + element['rect']['height'] / 2
+                    self.page.mouse.click(x, y)
+                    time.sleep(0.2)
+                    self.page.keyboard.press('Control+A')
+                    time.sleep(0.1)
+                    self.page.keyboard.type(text)
+                    strategies_tried.append('click_type_retry')
+                    self.page.wait_for_timeout(300)
+                    verified = verify_value_set()
+                except Exception:
+                    pass
+
+            if verified is False:
+                return {
+                    'success': False,
+                    'error': 'Text did not stick after retry — field may be a custom widget or reject programmatic input.',
+                    'strategies_tried': strategies_tried,
+                    'hint': 'Try click(nodeId) first, then sendKeys to type each character, or look for a custom input method.',
+                }
+
+            # verified is True or None (can't tell) — treat as success
+            return {'success': True, 'strategies_tried': strategies_tried}
+
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
@@ -729,8 +774,6 @@ class BrowserController:
             element_type: Type of element - 'button', 'link', or 'any'
         """
         try:
-            self.page.wait_for_timeout(300)
-            
             clicked = False
             
             # Strategy 1: By role (most reliable for buttons)
@@ -787,13 +830,12 @@ class BrowserController:
                 except Exception as e:
                     print(f"    Selector click failed: {e}")
             
-            # Wait for page to respond
+            # Wait for page to respond — short poll; auto-snapshot handles final readiness.
             if clicked:
                 try:
-                    self.page.wait_for_load_state('domcontentloaded', timeout=5000)
-                except:
+                    self.page.wait_for_load_state('domcontentloaded', timeout=1500)
+                except Exception:
                     pass
-                self.page.wait_for_timeout(500)
             
             return {
                 'success': clicked,
@@ -819,12 +861,16 @@ class BrowserController:
             
             snapshot = self.snapshot_cache.get('latest')
             if not snapshot:
-                return {'success': False, 'error': 'No snapshot available'}
-            
+                return {'success': False, 'error': 'No snapshot available. Call getInteractiveSnapshot first.'}
+
             element = next((e for e in snapshot['elements'] if e['nodeId'] == node_id), None)
             if not element:
-                return {'success': False, 'error': f'Element {node_id} not found'}
-            
+                return {
+                    'success': False,
+                    'error': f'nodeId {node_id} not in current snapshot.',
+                    'hint': 'Snapshot may be stale. Call getInteractiveSnapshot to refresh nodeIds.',
+                }
+
             # Parse date to ensure correct format
             date_obj = None
             try:
@@ -1092,12 +1138,16 @@ class BrowserController:
         try:
             snapshot = self.snapshot_cache.get('latest')
             if not snapshot:
-                return {'success': False, 'error': 'No snapshot available'}
-            
+                return {'success': False, 'error': 'No snapshot available. Call getInteractiveSnapshot first.'}
+
             element = next((e for e in snapshot['elements'] if e['nodeId'] == node_id), None)
             if not element:
-                return {'success': False, 'error': f'Element {node_id} not found'}
-            
+                return {
+                    'success': False,
+                    'error': f'nodeId {node_id} not in current snapshot.',
+                    'hint': 'Snapshot may be stale. Call getInteractiveSnapshot to refresh nodeIds.',
+                }
+
             state_info = {'success': True, 'nodeId': node_id, 'role': element['role']}
             
             # Try to get element state
@@ -1153,14 +1203,18 @@ class BrowserController:
             
             snapshot = self.snapshot_cache.get('latest')
             if not snapshot:
-                return {'success': False, 'error': 'No snapshot available'}
-            
+                return {'success': False, 'error': 'No snapshot available. Call getInteractiveSnapshot first.'}
+
             element = next((e for e in snapshot['elements'] if e['nodeId'] == node_id), None)
             if not element:
-                return {'success': False, 'error': f'Element {node_id} not found'}
-            
+                return {
+                    'success': False,
+                    'error': f'nodeId {node_id} not in current snapshot.',
+                    'hint': 'Snapshot may be stale. Call getInteractiveSnapshot to refresh nodeIds.',
+                }
+
             selected = False
-            
+
             # Strategy 1: Native select element
             try:
                 if element['name']:
@@ -1209,16 +1263,16 @@ class BrowserController:
         """Scroll down by viewport height"""
         try:
             self.page.evaluate('window.scrollBy(0, window.innerHeight * 0.8)')
-            time.sleep(0.3)
+            time.sleep(0.1)
             return {'success': True}
         except Exception as e:
             return {'success': False, 'error': str(e)}
-    
+
     def scroll_up(self) -> Dict[str, bool]:
         """Scroll up by viewport height"""
         try:
             self.page.evaluate('window.scrollBy(0, -window.innerHeight * 0.8)')
-            time.sleep(0.3)
+            time.sleep(0.1)
             return {'success': True}
         except Exception as e:
             return {'success': False, 'error': str(e)}
@@ -1258,66 +1312,46 @@ class BrowserController:
             return {'success': False, 'error': str(e)}
     
     def _wait_for_page_ready(self, timeout: int = 30000):
-        """Smart wait for page to be ready for interaction"""
+        """Fast readiness check. Exits as soon as the DOM is quiet, capped
+        at ~600ms for stable pages and ~1.2s for churny ones — instead of
+        the unconditional 2s MutationObserver window we used to use."""
         try:
-            # Wait for network to be mostly idle
             self.page.wait_for_load_state('domcontentloaded', timeout=timeout)
-            
-            # Wait for body to exist
-            self.page.wait_for_selector('body', timeout=5000)
-            
-            # Check if page has stabilized (no major DOM changes)
-            stable = self.page.evaluate('''
-                () => {
-                    return new Promise((resolve) => {
-                        let changeCount = 0;
-                        const observer = new MutationObserver(() => {
-                            changeCount++;
-                        });
-                        
-                        observer.observe(document.body, {
-                            childList: true,
-                            subtree: true
-                        });
-                        
-                        // Wait 2 seconds and check if changes are minimal
-                        setTimeout(() => {
-                            observer.disconnect();
-                            resolve(changeCount < 50); // Arbitrary threshold
-                        }, 2000);
+
+            # Short mutation-settle probe: 150ms of inactivity = "ready",
+            # hard-cap at 600ms. SPAs that keep mutating still get a second
+            # chance up to ~1.2s via the fallback wait below.
+            stable = self.page.evaluate(
+                '''() => new Promise((resolve) => {
+                    let lastChange = performance.now();
+                    const observer = new MutationObserver(() => {
+                        lastChange = performance.now();
                     });
-                }
-            ''')
-            
+                    observer.observe(document.body || document.documentElement, {
+                        childList: true, subtree: true
+                    });
+                    const start = performance.now();
+                    (function tick() {
+                        const now = performance.now();
+                        if (now - lastChange >= 150) {
+                            observer.disconnect();
+                            return resolve(true);
+                        }
+                        if (now - start >= 600) {
+                            observer.disconnect();
+                            return resolve(false);
+                        }
+                        setTimeout(tick, 50);
+                    })();
+                })'''
+            )
+
             if not stable:
-                # Page is still changing rapidly, wait a bit more
-                self.page.wait_for_timeout(2000)
-                
+                # Page still mutating — one short extra wait, then move on.
+                self.page.wait_for_timeout(500)
+
         except Exception as e:
-            # If waiting fails, continue anyway
             logger.warning("Page ready wait failed: %s", e)
-    
-    def _get_accessibility_snapshot_with_retry(self, max_retries: int = 3):
-        """Get accessibility snapshot with exponential backoff retry"""
-        for attempt in range(max_retries):
-            try:
-                snapshot = self.page.accessibility.snapshot()
-                if snapshot:
-                    return snapshot
-                    
-                # If empty, wait and retry
-                if attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 1000  # 1s, 2s, 3s
-                    self.page.wait_for_timeout(wait_time)
-                    
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    raise e
-                # Exponential backoff
-                wait_time = (2 ** attempt) * 1000
-                self.page.wait_for_timeout(wait_time)
-        
-        return None
     
     def get_page_load_status(self) -> Dict[str, Any]:
         """Check page load status"""

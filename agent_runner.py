@@ -12,7 +12,7 @@ from fastapi import WebSocket
 import app_state
 from utils.flows_store import save_flow
 from utils.llm_logging import setup_llm_logger, log_llm_interaction, calculate_cost
-from agent import BrowserAgent
+from agent import BrowserAgent, prune_history_for_llm
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,28 @@ def _run_agent_sync(agent: BrowserAgent, instruction: str, initial_url: Optional
     return agent.run(user_instruction=instruction, initial_url=initial_url, file_context=file_context)
 
 
+def _collect_page_text_fallback(agent: BrowserAgent) -> Dict[str, Any]:
+    """Runs in the Playwright thread. Returns truncated page text + URL/title."""
+    page = agent.browser.page
+    try:
+        text = page.evaluate(
+            "() => (document.body && document.body.innerText || '').slice(0, 4000)"
+        )
+    except Exception:
+        text = ''
+    url = ''
+    title = ''
+    try:
+        url = page.url
+    except Exception:
+        pass
+    try:
+        title = page.title()
+    except Exception:
+        pass
+    return {'url': url, 'title': title, 'pageText': text}
+
+
 async def run_agent_task(
     instruction: str,
     initial_url: Optional[str],
@@ -140,7 +162,11 @@ async def run_agent_task(
             app_state.agent, instruction, initial_url, emitter, llm_logger, file_context, file_name, files
         )
 
-        await emitter.emit("status", {"message": "Task completed", "status": "completed"})
+        if app_state.stop_requested:
+            status = "stopped"
+            await emitter.emit("status", {"message": "Task stopped", "status": "stopped"})
+        else:
+            await emitter.emit("status", {"message": "Task completed", "status": "completed"})
 
     except Exception as e:
         error = str(e)
@@ -149,6 +175,7 @@ async def run_agent_task(
         await emitter.emit("status", {"message": f"Task failed: {error}", "status": "failed"})
 
     finally:
+        app_state.stop_requested = False
         token_usage = app_state.agent.get_token_usage() if app_state.agent else {
             'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0
         }
@@ -258,7 +285,24 @@ async def run_agent_with_events(
     agent.reset_token_tracking()
     tools = agent.llm.get_tools_definition()
 
+    # Reset cancellation flag for this run
+    app_state.stop_requested = False
+
+    # Circuit breaker: track consecutive snapshot failures. If getInteractiveSnapshot
+    # fails twice in a row, on the next call we substitute a page-text fallback so
+    # the LLM can keep progressing instead of burning tokens looping.
+    snapshot_failure_streak = 0
+    SNAPSHOT_FAILURE_THRESHOLD = 2
+
     for iteration in range(agent.max_iterations):
+        if app_state.stop_requested:
+            await emitter.emit("action", {
+                "type": "stopped",
+                "message": "Task stopped by user",
+                "iteration": iteration + 1,
+            })
+            return "Task stopped by user."
+
         await emitter.emit("iteration", {"current": iteration + 1, "max": agent.max_iterations})
 
         try:
@@ -269,7 +313,10 @@ async def run_agent_with_events(
             })
 
             response = await asyncio.to_thread(
-                agent.llm.chat_completion, agent.conversation_history, tools, 'auto'
+                agent.llm.chat_completion,
+                prune_history_for_llm(agent.conversation_history),
+                tools,
+                'auto',
             )
 
             if hasattr(response, 'usage') and response.usage:
@@ -311,6 +358,14 @@ async def run_agent_with_events(
             })
 
             for tool_call in response.tool_calls:
+                if app_state.stop_requested:
+                    await emitter.emit("action", {
+                        "type": "stopped",
+                        "message": "Task stopped by user",
+                        "iteration": iteration + 1,
+                    })
+                    return "Task stopped by user."
+
                 function_name = tool_call.function.name
                 try:
                     arguments = json_module.loads(tool_call.function.arguments)
@@ -337,6 +392,38 @@ async def run_agent_with_events(
                     result = {'error': str(tool_error), 'success': False}
 
                 success = result.get('success', True) if not result.get('error') else False
+
+                # Snapshot circuit breaker — replace third+ consecutive failure with a
+                # page-text fallback so the agent can keep moving.
+                if function_name == 'getInteractiveSnapshot':
+                    if not success:
+                        snapshot_failure_streak += 1
+                        if snapshot_failure_streak > SNAPSHOT_FAILURE_THRESHOLD:
+                            try:
+                                fallback = await loop.run_in_executor(
+                                    app_state.playwright_executor,
+                                    _collect_page_text_fallback,
+                                    agent,
+                                )
+                                result = {
+                                    'success': False,
+                                    'error': 'Interactive snapshot unavailable; using page-text fallback.',
+                                    'hint': (
+                                        'Structured snapshot failed repeatedly. Work from this page text: '
+                                        'navigate by URL, or use clickByText with any visible label below. '
+                                        'Do NOT call getInteractiveSnapshot again until you navigate or scroll.'
+                                    ),
+                                    'fallback': True,
+                                    'url': fallback.get('url'),
+                                    'title': fallback.get('title'),
+                                    'pageText': fallback.get('pageText'),
+                                    'elements': [],
+                                }
+                            except Exception as fb_err:
+                                logger.warning("Page-text fallback failed: %s", fb_err)
+                    else:
+                        snapshot_failure_streak = 0
+
                 await emitter.emit("action", {
                     "type": "tool_result",
                     "tool": function_name,

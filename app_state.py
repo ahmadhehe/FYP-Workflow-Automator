@@ -16,6 +16,9 @@ current_task: Optional[Dict[str, Any]] = None
 task_lock = asyncio.Lock()
 websocket_clients: List[WebSocket] = []
 
+# Cooperative cancellation — set by /stop, checked between agent iterations.
+stop_requested: bool = False
+
 # Browser instances
 agent: Optional[BrowserAgent] = None
 profile_browser: Optional[BrowserController] = None

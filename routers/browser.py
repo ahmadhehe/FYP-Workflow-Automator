@@ -48,6 +48,10 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         if websocket in app_state.websocket_clients:
             app_state.websocket_clients.remove(websocket)
+        # If the frontend closed the last tab (e.g. page refresh) while a task is
+        # running, kill it immediately so a new tab can start a fresh execution.
+        if not app_state.websocket_clients and app_state.current_task:
+            app_state.stop_requested = True
 
 
 # ── Browser start/stop/status ─────────────────────────────────────────────────
@@ -73,10 +77,19 @@ def _close_agent(agent_instance):
 
 @router.post("/stop")
 async def stop_browser():
+    # If a task is running, ask the agent loop to halt cooperatively.
+    # The loop checks app_state.stop_requested between iterations and exits.
+    if app_state.current_task:
+        app_state.stop_requested = True
+        await broadcast_event({
+            "type": "stop_requested",
+            "data": {"message": "Stop requested. Halting after current step..."},
+        })
+        return {"status": "stopping", "message": "Stop requested. Task will halt after the current step."}
+
     if not app_state.agent:
         return {"status": "not_running", "message": "Browser is not running"}
-    if app_state.current_task:
-        return {"status": "busy", "message": "Cannot stop while task is running"}
+
     try:
         await asyncio.to_thread(_close_agent, app_state.agent)
         app_state.agent = None
