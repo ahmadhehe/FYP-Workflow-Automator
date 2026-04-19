@@ -98,6 +98,18 @@ class LLMClient:
 - clickByText("Submit") - For submit buttons
 - click(nodeId) - For form fields, checkboxes, radio buttons
 
+**WHEN A TOOL FAILS — RECOVERY PRINCIPLES:**
+- Read `error`, `hint`, `diagnosis`, and `_recovery` — they contain the reason and what to try next.
+- If `_recovery.strategies_exhausted` is true, that exact call is a dead end. Do not repeat it.
+- Change at least one of: the tool, the target element, or the approach.
+- Common patterns:
+  - "nodeId not in snapshot" → call getInteractiveSnapshot once, retry with new nodeIds.
+  - "Could not click / element not found" → try clickByText with the visible label instead.
+  - "Text did not stick" → click(nodeId) first to focus, then inputText.
+  - "net::ERR_*" or navigation failure → URL may be wrong; try goBack or a different URL.
+- If the same approach fails 3 times: try a completely different strategy or requestUserAction.
+- requestUserAction is for human-only actions (CAPTCHA, 2FA). Do not call it for tool failures you haven't fully diagnosed.
+
 **BEFORE COMPLETING A TASK:**
 - After clicking Submit, ALWAYS use checkFormErrors() to verify no errors occurred
 - Take a final snapshot to confirm the success message or confirmation page

@@ -17,6 +17,14 @@ from agent import BrowserAgent, prune_history_for_llm
 logger = logging.getLogger(__name__)
 
 
+def _failure_key(fn_name: str, args: dict) -> tuple:
+    """Compute a stable key for tracking consecutive failures of the same call."""
+    for k in ('nodeId', 'url', 'text', 'key', 'tabIndex'):
+        if k in args:
+            return (fn_name, str(args[k]))
+    return (fn_name, '')
+
+
 async def broadcast_event(event: Dict[str, Any]):
     """Broadcast a JSON event to all connected WebSocket clients (deduplicated by id)."""
     if not app_state.websocket_clients:
@@ -294,6 +302,13 @@ async def run_agent_with_events(
     snapshot_failure_streak = 0
     SNAPSHOT_FAILURE_THRESHOLD = 2
 
+    # Adaptive recovery: track consecutive failures per (tool, key_arg) pair.
+    # key: (function_name, primary_arg_value)  value: int count
+    tool_failure_streaks: Dict[tuple, int] = {}
+
+    # Loop detection: track recent tool calls to catch infinite loops
+    recent_tools: List[str] = []
+
     for iteration in range(agent.max_iterations):
         if app_state.stop_requested:
             await emitter.emit("action", {
@@ -400,6 +415,28 @@ async def run_agent_with_events(
 
                 success = result.get('success', True) if not result.get('error') else False
 
+                # Adaptive recovery: enrich failure results with structured context
+                key = _failure_key(function_name, arguments)
+                if not success:
+                    tool_failure_streaks[key] = tool_failure_streaks.get(key, 0) + 1
+                    streak = tool_failure_streaks[key]
+                    result['_recovery'] = {
+                        'attempt': streak,
+                        'tool': function_name,
+                        'strategies_exhausted': streak >= 2,
+                    }
+                    if streak >= 2:
+                        agent.conversation_history.append({
+                            'role': 'user',
+                            'content': (
+                                f"RECOVERY NEEDED: {function_name}({arguments}) has failed {streak} times in a row. "
+                                f"Do NOT repeat it with the same arguments. "
+                                f"Diagnose from the error above and try a fundamentally different approach."
+                            )
+                        })
+                else:
+                    tool_failure_streaks.pop(key, None)
+
                 # Snapshot circuit breaker — replace third+ consecutive failure with a
                 # page-text fallback so the agent can keep moving.
                 if function_name == 'getInteractiveSnapshot':
@@ -447,6 +484,18 @@ async def run_agent_with_events(
                     'tool_call_id': tool_call.id,
                     'content': json_module.dumps(result, default=str),
                 })
+
+                # Loop detection: catch when the same tool is called 3+ times in a row
+                recent_tools.append(function_name)
+                if len(recent_tools) > 6:
+                    recent_tools.pop(0)
+                if len(recent_tools) >= 3 and len(set(recent_tools[-3:])) == 1:
+                    repeated = recent_tools[-1]
+                    if repeated == 'getInteractiveSnapshot':
+                        hint = "LOOP: Stop calling getInteractiveSnapshot. Read _snapshot.elements from the last successful action and act directly."
+                    else:
+                        hint = f"LOOP: {repeated} called 3+ times in a row. Switch to a different tool or approach entirely."
+                    agent.conversation_history.append({'role': 'user', 'content': hint})
 
         await asyncio.sleep(0.1)
 
