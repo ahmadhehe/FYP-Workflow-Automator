@@ -46,7 +46,8 @@ def log_llm_interaction(logger: logging.Logger, iteration: int, messages: List[D
             else:
                 logger.info(content)
         if msg.get('tool_calls'):
-            logger.info(f"Tool Calls: {json.dumps(msg['tool_calls'], indent=2)}")
+            loggable = [{k: v for k, v in tc.items() if not isinstance(v, (bytes, bytearray))} for tc in msg['tool_calls']]
+            logger.info(f"Tool Calls: {json.dumps(loggable, indent=2, default=str)}")
 
     logger.info(f"\n{'='*40}")
     logger.info("LLM RESPONSE:")

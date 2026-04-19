@@ -485,20 +485,28 @@ class BrowserAgent:
                 # Add assistant message with tool calls
                 tool_calls_data = []
                 for tc in response.tool_calls:
-                    tool_calls_data.append({
+                    tc_entry = {
                         'id': tc.id,
                         'type': 'function',
                         'function': {
                             'name': tc.function.name,
                             'arguments': tc.function.arguments
                         }
-                    })
-                
-                self.conversation_history.append({
+                    }
+                    sig = getattr(tc, 'thought_signature', None)
+                    if sig:
+                        tc_entry['thought_signature'] = sig
+                    tool_calls_data.append(tc_entry)
+
+                history_entry = {
                     'role': 'assistant',
                     'content': response.content,
                     'tool_calls': tool_calls_data
-                })
+                }
+                gemini_content = getattr(response, '_gemini_content', None)
+                if gemini_content is not None:
+                    history_entry['_gemini_content'] = gemini_content
+                self.conversation_history.append(history_entry)
                 
                 # Execute each tool call
                 for tool_call in response.tool_calls:

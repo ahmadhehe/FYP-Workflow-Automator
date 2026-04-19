@@ -343,19 +343,26 @@ async def run_agent_with_events(
             return response.content
 
         if response.tool_calls:
-            tool_calls_data = [
-                {
+            tool_calls_data = []
+            for tc in response.tool_calls:
+                entry = {
                     'id': tc.id,
                     'type': 'function',
                     'function': {'name': tc.function.name, 'arguments': tc.function.arguments},
                 }
-                for tc in response.tool_calls
-            ]
-            agent.conversation_history.append({
+                sig = getattr(tc, 'thought_signature', None)
+                if sig:
+                    entry['thought_signature'] = sig
+                tool_calls_data.append(entry)
+            history_entry = {
                 'role': 'assistant',
                 'content': response.content,
                 'tool_calls': tool_calls_data,
-            })
+            }
+            gemini_content = getattr(response, '_gemini_content', None)
+            if gemini_content is not None:
+                history_entry['_gemini_content'] = gemini_content
+            agent.conversation_history.append(history_entry)
 
             for tool_call in response.tool_calls:
                 if app_state.stop_requested:

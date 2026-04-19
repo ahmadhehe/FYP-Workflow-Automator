@@ -5,7 +5,8 @@ from typing import List, Dict, Any, Optional
 import os
 from openai import OpenAI
 from anthropic import Anthropic
-import google.generativeai as genai
+from google import genai as google_genai
+from google.genai import types as genai_types
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,9 +23,8 @@ class LLMClient:
             self.client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
             self.model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
         elif provider == "gemini":
-            genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-            self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-            self.client = genai.GenerativeModel(self.model)
+            self.client = google_genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+            self.model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
         else:
             raise ValueError(f"Unsupported provider: {provider}")
     
@@ -248,252 +248,193 @@ Be decisive. If you see a "Next" button, click it. Don't keep scrolling looking 
         return msg
     
     def _gemini_completion(self, messages, tools, tool_choice):
-        """Gemini completion with function calling"""
+        """Gemini completion with function calling (google-genai SDK)"""
         import json
-        import uuid
-        from google.generativeai import protos
-        
+        gt = genai_types
+
+        type_mapping = {
+            'object': gt.Type.OBJECT,
+            'string': gt.Type.STRING,
+            'number': gt.Type.NUMBER,
+            'integer': gt.Type.INTEGER,
+            'boolean': gt.Type.BOOLEAN,
+            'array': gt.Type.ARRAY,
+        }
+
+        def convert_property(prop_schema):
+            prop_type = prop_schema.get('type', 'string')
+            kwargs = {'type': type_mapping.get(prop_type, gt.Type.STRING)}
+            if 'description' in prop_schema:
+                kwargs['description'] = prop_schema['description']
+            if 'enum' in prop_schema:
+                kwargs['enum'] = prop_schema['enum']
+            if prop_type == 'array' and 'items' in prop_schema:
+                kwargs['items'] = convert_property(prop_schema['items'])
+            if prop_type == 'object' and 'properties' in prop_schema:
+                kwargs['properties'] = {
+                    k: convert_property(v) for k, v in prop_schema['properties'].items()
+                }
+                if 'required' in prop_schema:
+                    kwargs['required'] = prop_schema['required']
+            return gt.Schema(**kwargs)
+
         def convert_schema_to_gemini(schema):
-            """Convert OpenAI-style JSON schema to Gemini protos.Schema format"""
             if not schema or not isinstance(schema, dict):
                 return None
-            
-            # Map OpenAI types to Gemini types
-            type_mapping = {
-                'object': protos.Type.OBJECT,
-                'string': protos.Type.STRING,
-                'number': protos.Type.NUMBER,
-                'integer': protos.Type.INTEGER,
-                'boolean': protos.Type.BOOLEAN,
-                'array': protos.Type.ARRAY,
-            }
-            
-            def convert_property(prop_schema):
-                """Recursively convert a single property schema to Gemini format"""
-                prop_type = prop_schema.get('type', 'string')
-                prop_kwargs = {
-                    'type': type_mapping.get(prop_type, protos.Type.STRING)
-                }
-                if 'description' in prop_schema:
-                    prop_kwargs['description'] = prop_schema['description']
-                if 'enum' in prop_schema:
-                    prop_kwargs['enum'] = prop_schema['enum']
-                
-                # Handle array items recursively
-                if prop_type == 'array' and 'items' in prop_schema:
-                    items_schema = prop_schema['items']
-                    prop_kwargs['items'] = convert_property(items_schema)
-                
-                # Handle nested objects with properties
-                if prop_type == 'object' and 'properties' in prop_schema:
-                    nested_props = {}
-                    for nested_name, nested_schema in prop_schema['properties'].items():
-                        nested_props[nested_name] = convert_property(nested_schema)
-                    prop_kwargs['properties'] = nested_props
-                    if 'required' in prop_schema:
-                        prop_kwargs['required'] = prop_schema['required']
-                
-                return protos.Schema(**prop_kwargs)
-            
-            schema_type = schema.get('type', 'object')
             properties = schema.get('properties', {})
-            required = schema.get('required', [])
-            
-            # If no properties, return None (Gemini doesn't like empty schemas)
             if not properties:
                 return None
-            
-            # Convert properties to Gemini Schema format
-            gemini_properties = {}
-            for prop_name, prop_schema in properties.items():
-                gemini_properties[prop_name] = convert_property(prop_schema)
-            
-            return protos.Schema(
-                type=type_mapping.get(schema_type, protos.Type.OBJECT),
-                properties=gemini_properties,
-                required=required if required else None
+            required = schema.get('required', [])
+            return gt.Schema(
+                type=type_mapping.get(schema.get('type', 'object'), gt.Type.OBJECT),
+                properties={k: convert_property(v) for k, v in properties.items()},
+                required=required if required else None,
             )
-        
-        # Convert OpenAI tool format to Gemini format
-        gemini_tools = []
+
+        function_declarations = []
         for tool in tools:
             if tool['type'] == 'function':
                 func_def = tool['function']
-                params = func_def.get('parameters', {})
-                
-                gemini_schema = convert_schema_to_gemini(params)
-                
-                gemini_tools.append(protos.FunctionDeclaration(
+                function_declarations.append(gt.FunctionDeclaration(
                     name=func_def['name'],
                     description=func_def['description'],
-                    parameters=gemini_schema
+                    parameters=convert_schema_to_gemini(func_def.get('parameters', {})),
                 ))
-        
-        # Build Gemini tool config
-        from google.generativeai.types import content_types
-        tool_config = content_types.to_tool_config({
-            'function_calling_config': {'mode': 'AUTO'}
-        })
-        
-        # Convert messages to Gemini format
-        # Separate system message and build conversation history
+        gemini_tools = [gt.Tool(function_declarations=function_declarations)]
+        tool_config = gt.ToolConfig(
+            function_calling_config=gt.FunctionCallingConfig(mode='AUTO')
+        )
+
         system_msg = next((m['content'] for m in messages if m['role'] == 'system'), '')
-        
-        # Create a new model with system instruction for this request
-        # Use lower temperature for more deterministic behavior
-        generation_config = genai.types.GenerationConfig(
-            temperature=0.3,
-            max_output_tokens=4096
-        )
-        
-        model_with_system = genai.GenerativeModel(
-            self.model,
-            system_instruction=system_msg,
-            tools=gemini_tools,
-            generation_config=generation_config
-        )
-        
-        # Build chat history
-        gemini_history = []
-        for msg in messages:
+
+        contents = []
+        for idx, msg in enumerate(messages):
             if msg['role'] == 'system':
-                continue  # Already handled as system instruction
+                continue
             elif msg['role'] == 'user':
-                gemini_history.append({
-                    'role': 'user',
-                    'parts': [{'text': msg['content']}]
-                })
+                contents.append(gt.Content(
+                    role='user',
+                    parts=[gt.Part(text=msg['content'] or '')],
+                ))
             elif msg['role'] == 'assistant':
+                cached = msg.get('_gemini_content')
+                if cached is not None:
+                    contents.append(cached)
+                    continue
                 parts = []
                 if msg.get('content'):
-                    parts.append({'text': msg['content']})
+                    parts.append(gt.Part(text=msg['content']))
                 if msg.get('tool_calls'):
                     for tc in msg['tool_calls']:
-                        parts.append({
-                            'function_call': {
-                                'name': tc['function']['name'],
-                                'args': json.loads(tc['function']['arguments'])
-                            }
-                        })
+                        fc = gt.FunctionCall(
+                            name=tc['function']['name'],
+                            args=json.loads(tc['function']['arguments']),
+                        )
+                        part_kwargs = {'function_call': fc}
+                        sig = tc.get('thought_signature')
+                        if sig:
+                            part_kwargs['thought_signature'] = sig
+                        parts.append(gt.Part(**part_kwargs))
                 if parts:
-                    gemini_history.append({
-                        'role': 'model',
-                        'parts': parts
-                    })
+                    contents.append(gt.Content(role='model', parts=parts))
             elif msg['role'] == 'tool':
-                # Tool results in Gemini format
                 tool_call_id = msg.get('tool_call_id', 'unknown')
-                # Find the function name from the previous assistant message
                 func_name = 'unknown'
-                for prev_msg in reversed(messages[:messages.index(msg)]):
+                for prev_msg in reversed(messages[:idx]):
                     if prev_msg.get('tool_calls'):
                         for tc in prev_msg['tool_calls']:
                             if tc['id'] == tool_call_id:
                                 func_name = tc['function']['name']
                                 break
                         break
-                
                 try:
                     result_data = json.loads(msg['content'])
-                except:
+                    if not isinstance(result_data, dict):
+                        result_data = {'result': result_data}
+                except (ValueError, TypeError):
                     result_data = {'result': msg['content']}
-                
-                gemini_history.append({
-                    'role': 'user',
-                    'parts': [{
-                        'function_response': {
-                            'name': func_name,
-                            'response': result_data
-                        }
-                    }]
-                })
-        
-        # Start chat and get response
-        chat = model_with_system.start_chat(history=gemini_history[:-1] if gemini_history else [])
-        
-        # Get the last message to send
-        if gemini_history:
-            last_msg = gemini_history[-1]
-            response = chat.send_message(last_msg['parts'], tool_config=tool_config)
-        else:
-            response = chat.send_message("Hello", tool_config=tool_config)
-        
-        # Convert response back to OpenAI format with usage data
+                contents.append(gt.Content(
+                    role='user',
+                    parts=[gt.Part(function_response=gt.FunctionResponse(
+                        name=func_name,
+                        response=result_data,
+                    ))],
+                ))
+
+        config = gt.GenerateContentConfig(
+            system_instruction=system_msg if system_msg else None,
+            tools=gemini_tools,
+            tool_config=tool_config,
+            temperature=0.3,
+            max_output_tokens=4096,
+        )
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=contents,
+            config=config,
+        )
+
         message = self._convert_gemini_response(response)
-        # Attach usage data
-        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+        usage = getattr(response, 'usage_metadata', None)
+        if usage:
             message.usage = {
-                'input_tokens': response.usage_metadata.prompt_token_count,
-                'output_tokens': response.usage_metadata.candidates_token_count,
-                'total_tokens': response.usage_metadata.total_token_count
+                'input_tokens': getattr(usage, 'prompt_token_count', 0) or 0,
+                'output_tokens': getattr(usage, 'candidates_token_count', 0) or 0,
+                'total_tokens': getattr(usage, 'total_token_count', 0) or 0,
             }
         return message
     
     def _convert_gemini_response(self, response):
-        """Convert Gemini response to OpenAI format"""
+        """Convert google-genai response to OpenAI-style message"""
         import json
         import uuid
-        
+
         class Message:
             def __init__(self):
                 self.content = None
                 self.tool_calls = None
-        
+
         msg = Message()
-        
-        # Extract content and function calls
         text_content = []
         tool_calls = []
-        
-        for part in response.parts:
-            if hasattr(part, 'text') and part.text:
+
+        candidates = getattr(response, 'candidates', None) or []
+        if not candidates:
+            msg.content = None
+            msg.tool_calls = None
+            return msg
+
+        content = getattr(candidates[0], 'content', None)
+        parts = getattr(content, 'parts', None) or [] if content else []
+        msg._gemini_content = content
+
+        class ToolCall:
+            def __init__(self, id, name, arguments, thought_signature=None):
+                self.id = id
+                self.type = 'function'
+                self.function = type('obj', (object,), {
+                    'name': name,
+                    'arguments': arguments,
+                })()
+                self.thought_signature = thought_signature
+
+        for part in parts:
+            if getattr(part, 'text', None):
                 text_content.append(part.text)
-            elif hasattr(part, 'function_call') and part.function_call:
+            elif getattr(part, 'function_call', None):
                 fc = part.function_call
-                
-                # Convert Gemini's proto-plus args to a regular Python dict
-                # fc.args is a Struct-like proto object; we recursively convert it
-                def _proto_to_python(val):
-                    """Recursively convert protobuf/proto-plus values to native Python"""
-                    if val is None:
-                        return None
-                    if isinstance(val, (str, int, float, bool)):
-                        return val
-                    # Dict-like (Struct, MapComposite)
-                    if hasattr(val, 'items') and callable(getattr(val, 'items')):
-                        return {str(k): _proto_to_python(v) for k, v in val.items()}
-                    # List-like (ListValue, RepeatedComposite)
-                    if hasattr(val, '__iter__'):
-                        try:
-                            return [_proto_to_python(item) for item in val]
-                        except TypeError:
-                            return str(val)
-                    return val
-                
-                try:
-                    args_dict = _proto_to_python(fc.args) or {}
-                except Exception as e:
-                    logger.warning("Failed to convert Gemini args: %s", e)
-                    args_dict = {}
-                
-                class ToolCall:
-                    def __init__(self, id, name, arguments):
-                        self.id = id
-                        self.type = 'function'
-                        self.function = type('obj', (object,), {
-                            'name': name,
-                            'arguments': arguments
-                        })()
-                
+                args_dict = dict(fc.args) if fc.args else {}
+                sig = getattr(part, 'thought_signature', None) or None
                 tool_calls.append(ToolCall(
                     f"call_{uuid.uuid4().hex[:8]}",
                     fc.name,
-                    json.dumps(args_dict)
+                    json.dumps(args_dict),
+                    sig,
                 ))
-        
+
         msg.content = ' '.join(text_content) if text_content else None
         msg.tool_calls = tool_calls if tool_calls else None
-        
         return msg
     
     def get_tools_definition(self) -> List[Dict[str, Any]]:
