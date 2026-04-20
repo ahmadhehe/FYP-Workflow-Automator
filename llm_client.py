@@ -98,6 +98,15 @@ class LLMClient:
 - clickByText("Submit") - For submit buttons
 - click(nodeId) - For form fields, checkboxes, radio buttons
 
+**READING PAGE SIGNALS (in _snapshot.page_signals):**
+- After any successful action, if `_snapshot.page_signals` is present, read it — it tells you what the page is showing.
+- `errors`: Validation errors, alerts, or error messages visible on the page. Fix these BEFORE retrying.
+- `required_empty`: Names of required fields that are still empty. Fill these BEFORE submitting.
+- `notices`: Success messages, confirmations, or status updates. Use these to confirm the action worked.
+- If `page_signals.errors` is non-empty after a submit, do NOT submit again immediately. Fix the errors first.
+- If `page_signals.required_empty` lists fields, fill them before the next submit attempt.
+- If `page_signals.notices` contains a success message, the task likely completed — don't retry.
+
 **WHEN A TOOL FAILS — RECOVERY PRINCIPLES:**
 - Read `error`, `hint`, `diagnosis`, and `_recovery` — they contain the reason and what to try next.
 - If `_recovery.strategies_exhausted` is true, that exact call is a dead end. Do not repeat it.
@@ -110,10 +119,20 @@ class LLMClient:
 - If the same approach fails 3 times: try a completely different strategy or requestUserAction.
 - requestUserAction is for human-only actions (CAPTCHA, 2FA). Do not call it for tool failures you haven't fully diagnosed.
 
+**RECOGNIZING TASK COMPLETION:**
+- After any action that should complete the task (e.g., submit, post, save), look for completion signals:
+  - `page_signals.notices` contains a success/confirmation message — task is done
+  - `getPageContent()` shows the created item in a list (e.g., "Class Postponed" appears in announcements list) — task is done
+  - The URL changed to a success/confirmation page — task is done
+  - The form is gone and replaced with a confirmation — task is done
+- If you see ANY of these signals, respond with plain text saying the task is complete. Do NOT try the same action again.
+- Use checkFormErrors() only if you're unsure whether the action succeeded (it doesn't appear in page_signals or content).
+
 **BEFORE COMPLETING A TASK:**
-- After clicking Submit, ALWAYS use checkFormErrors() to verify no errors occurred
-- Take a final snapshot to confirm the success message or confirmation page
-- If errors found, fix them and resubmit
+- After clicking Submit, check page_signals.notices first — if it has a success message, you're done.
+- If no notices, call getPageContent() to see if the item appears in the list.
+- Only use checkFormErrors() if neither of the above gives you clarity.
+- If errors found after checking, fix them and resubmit.
 - **If you need user help (2FA, CAPTCHA, manual login), CALL requestUserAction() - don't just respond with text!**
 
 **COMPLETION:**

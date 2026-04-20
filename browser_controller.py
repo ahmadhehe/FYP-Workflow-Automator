@@ -763,7 +763,103 @@ class BrowserController:
             
         except Exception as e:
             return {'hasErrors': False, 'errors': [], 'error': str(e)}
-    
+
+    def get_page_signals(self) -> Dict[str, Any]:
+        """
+        Lightweight scan for page-level feedback signals: validation errors, required empty fields, success notices.
+        Returns empty lists if nothing found. Used to give the LLM context about what the page is showing.
+        """
+        try:
+            signals = self.page.evaluate('''() => {
+                const errors = [];
+                const required_empty = [];
+                const notices = [];
+
+                // === ERRORS ===
+                // 1. ARIA alert role
+                document.querySelectorAll('[role="alert"]').forEach(el => {
+                    const text = el.textContent?.trim();
+                    if (text && text.length < 200) errors.push(text);
+                });
+
+                // 2. aria-invalid
+                document.querySelectorAll('[aria-invalid="true"]').forEach(el => {
+                    const label = el.getAttribute('aria-label') || el.getAttribute('aria-describedby');
+                    if (label) errors.push(label);
+                });
+
+                // 3. Error message classes
+                document.querySelectorAll('.error, .error-message, .validation-error, .invalid-feedback, [data-error-message]').forEach(el => {
+                    const text = el.textContent?.trim();
+                    if (text && text.length < 200 && el.offsetParent) {
+                        errors.push(text);
+                    }
+                });
+
+                // 4. Red-ish text with error keywords
+                const errorKeywords = /error|invalid|required|must|please|fail|wrong/i;
+                document.querySelectorAll('*').forEach(el => {
+                    const text = el.textContent?.trim() || '';
+                    if (errorKeywords.test(text) && text.length < 200 && text.length > 5 && el.offsetParent) {
+                        const color = window.getComputedStyle(el).color;
+                        if (color.match(/rgb\\((1[0-9]{2}|2[0-4][0-9]|25[0-5]),\\s*([0-9]{1,2}|[0-9]{1,2}),/)) {
+                            if (!errors.includes(text)) errors.push(text);
+                        }
+                    }
+                });
+
+                // === REQUIRED EMPTY FIELDS ===
+                document.querySelectorAll('input[required], textarea[required], select[required], [aria-required="true"]').forEach(el => {
+                    if (el.offsetParent && (el.value === '' || el.value === null)) {
+                        const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
+                                     document.querySelector(`label[for="${el.id}"]`)?.textContent?.trim() ||
+                                     el.name || 'Field';
+                        required_empty.push(label);
+                    }
+                });
+
+                // === NOTICES (Success/Status) ===
+                // 1. ARIA status
+                document.querySelectorAll('[role="status"]').forEach(el => {
+                    const text = el.textContent?.trim();
+                    if (text && text.length < 200) notices.push(text);
+                });
+
+                // 2. Success message classes
+                document.querySelectorAll('.success, .alert-success, .success-message, .confirmation, [data-success]').forEach(el => {
+                    const text = el.textContent?.trim();
+                    if (text && text.length < 200 && el.offsetParent && !notices.includes(text)) {
+                        notices.push(text);
+                    }
+                });
+
+                // 3. Green-ish text with success keywords
+                const successKeywords = /success|complete|posted|saved|confirmed|done|processed/i;
+                document.querySelectorAll('*').forEach(el => {
+                    const text = el.textContent?.trim() || '';
+                    if (successKeywords.test(text) && text.length < 200 && text.length > 5 && el.offsetParent) {
+                        const color = window.getComputedStyle(el).color;
+                        if (color.match(/rgb\\(([0-9]{1,2}),\\s*(1[0-9]{2}|2[0-4][0-9]|25[0-5]),/)) {
+                            if (!notices.includes(text)) notices.push(text);
+                        }
+                    }
+                });
+
+                // Deduplicate and limit
+                const dedup = (arr) => [...new Set(arr)].slice(0, 5);
+
+                return {
+                    errors: dedup(errors),
+                    required_empty: dedup(required_empty),
+                    notices: dedup(notices).slice(0, 3),
+                    has_signals: errors.length > 0 || required_empty.length > 0 || notices.length > 0
+                };
+            }''')
+            return signals
+        except Exception as e:
+            logger.warning(f"Failed to scan page signals: {e}")
+            return {'errors': [], 'required_empty': [], 'notices': [], 'has_signals': False}
+
     def click_by_text(self, text: str, element_type: str = 'any') -> Dict[str, Any]:
         """
         Click on an element by its visible text content.

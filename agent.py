@@ -148,6 +148,13 @@ class BrowserAgent:
                         'elementCount': snap.get('elementCount'),
                         'elements': snap.get('elements'),
                     }
+                    # Auto-attach page signals (errors, required fields, success notices)
+                    try:
+                        signals = self.browser.get_page_signals()
+                        if signals.get('has_signals'):
+                            result['_snapshot']['page_signals'] = signals
+                    except Exception:
+                        pass  # Signals are advisory; never fail the action
             except Exception as e:
                 # Auto-snapshot is a convenience; never let it fail the action.
                 print(f"    ⚠️  auto-snapshot after {tool_name} failed: {e}")
