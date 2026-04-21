@@ -133,6 +133,13 @@ async def run_agent_task(
     status = "completed"
     stored_instruction = original_instruction if original_instruction is not None else instruction
 
+    # Capture the running asyncio loop so the Playwright executor thread can
+    # schedule WS broadcasts back onto it (e.g. for requestUserAction).
+    try:
+        app_state._event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        app_state._event_loop = asyncio.get_event_loop()
+
     try:
         if not app_state.agent:
             await emitter.emit("status", {"message": "Starting browser...", "status": "initializing"})
@@ -184,6 +191,14 @@ async def run_agent_task(
 
     finally:
         app_state.stop_requested = False
+        # Clear any lingering intervention state and unblock the Playwright
+        # thread if it was waiting (e.g. after a stop or unhandled error).
+        if app_state.intervention_pending:
+            app_state.intervention_pending = False
+            app_state.intervention_response = ''
+            app_state.intervention_event.set()
+        app_state.intervention_message = None
+        app_state.intervention_reason = None
         token_usage = app_state.agent.get_token_usage() if app_state.agent else {
             'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0
         }

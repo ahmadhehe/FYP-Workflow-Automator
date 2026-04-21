@@ -8,6 +8,7 @@ export function useWebSocket() {
   const [events, setEvents] = useState([]);
   const [currentIteration, setCurrentIteration] = useState(null);
   const [taskStatus, setTaskStatus] = useState(null);
+  const [interventionData, setInterventionData] = useState(null);
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
 
@@ -72,7 +73,20 @@ export function useWebSocket() {
           case 'browser_stopped':
             // Handle browser state changes
             break;
-          
+
+          case 'intervention_required':
+            setInterventionData({
+              message: data.data?.message,
+              reason: data.data?.reason,
+            });
+            setTaskStatus('intervention');
+            break;
+
+          case 'intervention_resolved':
+            setInterventionData(null);
+            setTaskStatus('running');
+            break;
+
           default:
             break;
         }
@@ -110,6 +124,7 @@ export function useWebSocket() {
     setEvents([]);
     setCurrentIteration(null);
     setTaskStatus(null);
+    setInterventionData(null);
   }, []);
 
   const sendPing = useCallback(() => {
@@ -136,6 +151,7 @@ export function useWebSocket() {
     events,
     currentIteration,
     taskStatus,
+    interventionData,
     clearEvents,
     reconnect: connect,
   };

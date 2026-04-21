@@ -994,6 +994,34 @@ Be decisive. If you see a "Next" button, click it. Don't keep scrolling looking 
             {
                 'type': 'function',
                 'function': {
+                    'name': 'requestUserAction',
+                    'description': (
+                        'Pause automation and ask the human to complete something manually '
+                        '(CAPTCHA, OTP, 2FA, manual login, cookie consent, or any step requiring '
+                        'human judgment). The agent loop blocks until the user responds via the '
+                        'in-browser overlay or the dashboard. The typed response (if any) is '
+                        'returned in userResponse; userCompleted is true when the user confirmed.'
+                    ),
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'message': {
+                                'type': 'string',
+                                'description': 'Clear, concise instruction of what the user should do (e.g. "Please enter the OTP sent to your phone").'
+                            },
+                            'reason': {
+                                'type': 'string',
+                                'enum': ['captcha', 'otp', '2fa', 'login', 'manual', 'cookie_consent', 'other'],
+                                'description': 'Category of intervention — drives the icon shown to the user.'
+                            }
+                        },
+                        'required': ['message']
+                    }
+                }
+            },
+            {
+                'type': 'function',
+                'function': {
                     'name': 'uploadFileToBrowser',
                     'description': (
                         "Upload one of the user's attached files to a file input element on the current page. "

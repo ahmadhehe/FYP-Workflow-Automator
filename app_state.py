@@ -29,3 +29,17 @@ google_sheets_client = GoogleSheetsClient()
 # Dedicated single-threaded executor for Playwright (maintains thread affinity)
 playwright_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playwright")
 playwright_thread_lock = threading.Lock()
+
+# Human intervention bridge — used by requestUserAction to block the Playwright
+# thread until the user responds via POST /intervention/respond. threading.Event
+# (not asyncio.Event) is required: .wait() must block only the executor thread,
+# while .set() must be callable safely from the asyncio loop.
+intervention_pending: bool = False
+intervention_event: threading.Event = threading.Event()
+intervention_response: Optional[str] = None
+intervention_message: Optional[str] = None
+intervention_reason: Optional[str] = None
+
+# Captured at task start so the Playwright thread can schedule WS broadcasts
+# back onto the asyncio loop via run_coroutine_threadsafe.
+_event_loop: Optional[asyncio.AbstractEventLoop] = None

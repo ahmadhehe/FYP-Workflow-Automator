@@ -46,6 +46,13 @@ class ApiService {
     return this.request('/stop', { method: 'POST' });
   }
 
+  async respondToIntervention(response = '') {
+    return this.request('/intervention/respond', {
+      method: 'POST',
+      body: JSON.stringify({ response }),
+    });
+  }
+
   async getStatus() {
     return this.request('/status');
   }

@@ -397,6 +397,63 @@ class BrowserAgent:
                 print(f"    ✓ Format cells {'succeeded' if result.get('success') else 'failed'}")
                 return result
                 
+            elif tool_name == 'requestUserAction':
+                import asyncio as _asyncio
+                import app_state as _app_state
+
+                message = arguments.get('message', 'Please complete the required action.')
+                reason = arguments.get('reason', 'manual')
+
+                print(f"    ⏸  Pausing for user intervention ({reason}): {message}")
+
+                # Reset the event and publish the pending intervention state so
+                # both the in-browser overlay and the dashboard can show it.
+                _app_state.intervention_event.clear()
+                _app_state.intervention_response = None
+                _app_state.intervention_message = message
+                _app_state.intervention_reason = reason
+                _app_state.intervention_pending = True
+
+                # Broadcast from the asyncio loop — we're on the Playwright executor thread
+                # here, so run_coroutine_threadsafe is the right bridge. The .wait() below
+                # blocks only this thread; the asyncio loop remains free to serve
+                # /intervention/respond and WebSocket traffic.
+                if _app_state._event_loop:
+                    async def _emit_intervention():
+                        from agent_runner import broadcast_event
+                        await broadcast_event({
+                            'type': 'intervention_required',
+                            'data': {'message': message, 'reason': reason},
+                        })
+                    try:
+                        _asyncio.run_coroutine_threadsafe(_emit_intervention(), _app_state._event_loop)
+                    except Exception as emit_err:
+                        print(f"    ⚠️  Failed to broadcast intervention_required: {emit_err}")
+
+                signalled = _app_state.intervention_event.wait(timeout=600)
+
+                if not signalled:
+                    _app_state.intervention_pending = False
+                    _app_state.intervention_message = None
+                    _app_state.intervention_reason = None
+                    print(f"    ✗ Intervention timed out after 10 minutes")
+                    return {
+                        'success': False,
+                        'error': 'Intervention timed out after 10 minutes.',
+                        'userCompleted': False,
+                    }
+
+                user_response = _app_state.intervention_response or ''
+                _app_state.intervention_response = None
+                _app_state.intervention_message = None
+                _app_state.intervention_reason = None
+                print(f"    ✓ User intervention completed (response length: {len(user_response)})")
+                return {
+                    'success': True,
+                    'userResponse': user_response,
+                    'userCompleted': True,
+                }
+
             elif tool_name == 'uploadFileToBrowser':
                 node_id = int(arguments['nodeId'])
                 file_name = arguments['fileName']

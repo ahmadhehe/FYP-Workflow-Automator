@@ -14,6 +14,506 @@ logger = logging.getLogger(__name__)
 DEFAULT_PROFILE_DIR = os.path.join(os.path.dirname(__file__), "browser_profile")
 
 
+# ── Overlay injection ────────────────────────────────────────────────────────
+# Self-contained JS injected into every page + new tab via context.add_init_script.
+# Uses Shadow DOM so page CSS can't affect it and it can't affect page layout.
+# Host is pointer-events:none; interactive bits inside the shadow re-enable
+# pointer-events so automation (coordinate-based CDP clicks) never hits the panel.
+OVERLAY_SCRIPT = r"""
+(() => {
+  if (window.__agentOverlayInjected) return;
+  window.__agentOverlayInjected = true;
+
+  // Don't inject into iframes — only the top document gets the overlay.
+  if (window.top !== window.self) return;
+
+  // Defer until <body> exists — init scripts can run before DOM is ready.
+  const install = () => {
+    if (!document.body) {
+      requestAnimationFrame(install);
+      return;
+    }
+
+    const BACKEND_HTTP = 'http://localhost:8000';
+    const BACKEND_WS   = 'ws://localhost:8000/ws';
+
+    // Host container (page-visible, but pointer-events none so it doesn't block clicks)
+    const host = document.createElement('div');
+    host.id = '__agent_overlay_host__';
+    host.style.cssText = [
+      'position:fixed', 'inset:0',
+      'pointer-events:none',
+      'z-index:2147483647',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+    ].join(';');
+    document.documentElement.appendChild(host);
+    const root = host.attachShadow({ mode: 'open' });
+
+    const style = document.createElement('style');
+    style.textContent = `
+      :host, * { box-sizing: border-box; }
+      .panel, .modal-backdrop, .btn, input, .header, .minimized-btn {
+        pointer-events: auto;
+      }
+      .panel {
+        position: absolute;
+        bottom: 20px;
+        right: 20px;
+        width: 340px;
+        background: rgba(255, 255, 255, 0.72);
+        backdrop-filter: blur(18px) saturate(180%);
+        -webkit-backdrop-filter: blur(18px) saturate(180%);
+        border: 1px solid rgba(255, 255, 255, 0.6);
+        border-radius: 16px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.06);
+        color: #1a1a1a;
+        overflow: hidden;
+        transition: opacity 180ms ease, transform 180ms ease;
+        font-size: 13px;
+      }
+      .panel.hidden { opacity: 0; transform: translateY(12px); pointer-events: none; }
+      .header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 10px 14px;
+        cursor: grab;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+        background: linear-gradient(180deg, rgba(255,255,255,0.4), rgba(255,255,255,0));
+      }
+      .header.dragging { cursor: grabbing; }
+      .title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+      .status-dot {
+        width: 8px; height: 8px; border-radius: 50%;
+        background: #3b82f6;
+        box-shadow: 0 0 8px rgba(59, 130, 246, 0.7);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      .status-dot.complete { background: #10b981; box-shadow: 0 0 8px rgba(16,185,129,0.7); animation: none; }
+      .status-dot.intervention { background: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,0.7); }
+      .status-dot.error { background: #ef4444; box-shadow: 0 0 8px rgba(239,68,68,0.7); animation: none; }
+      .status-dot.idle { background: #9ca3af; box-shadow: none; animation: none; }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.55; transform: scale(0.88); }
+      }
+      .header-controls { display: flex; gap: 4px; }
+      .icon-btn {
+        width: 22px; height: 22px; border: 0; background: transparent;
+        border-radius: 6px; cursor: pointer; color: #555;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 14px; line-height: 1;
+        transition: background 120ms;
+      }
+      .icon-btn:hover { background: rgba(0, 0, 0, 0.06); }
+      .body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+      .task {
+        font-size: 12px; line-height: 1.4; color: #444;
+        display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+        overflow: hidden;
+        max-height: 3.8em;
+      }
+      .progress-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #666; }
+      .progress-track {
+        flex: 1; height: 4px; background: rgba(0, 0, 0, 0.08);
+        border-radius: 2px; overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%; background: linear-gradient(90deg, #8b1a1a, #c39340);
+        width: 0%; transition: width 300ms ease;
+      }
+      .action-text {
+        font-size: 11px; color: #555;
+        padding: 6px 8px; background: rgba(0,0,0,0.04); border-radius: 6px;
+        max-height: 2.4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .btn {
+        border: 0; border-radius: 8px; padding: 8px 12px;
+        font-size: 12px; font-weight: 600; cursor: pointer;
+        transition: transform 90ms, box-shadow 120ms, background 120ms;
+      }
+      .btn:active { transform: translateY(1px); }
+      .btn-danger { background: rgba(239, 68, 68, 0.95); color: #fff; }
+      .btn-danger:hover { background: rgba(220, 38, 38, 1); }
+      .btn-secondary { background: rgba(0,0,0,0.08); color: #222; }
+      .btn-secondary:hover { background: rgba(0,0,0,0.14); }
+      .btn-primary {
+        background: linear-gradient(180deg, #8b1a1a, #6b1010); color: #fff;
+        box-shadow: 0 4px 12px rgba(139, 26, 26, 0.35);
+      }
+      .btn-primary:hover { filter: brightness(1.08); }
+      .btn-row { display: flex; gap: 6px; }
+      .confirm-card {
+        background: rgba(239, 68, 68, 0.08);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        padding: 8px 10px; border-radius: 8px;
+        font-size: 12px;
+      }
+      .confirm-card .label { margin-bottom: 6px; color: #991b1b; }
+
+      .minimized-btn {
+        position: absolute; bottom: 20px; right: 20px;
+        width: 48px; height: 48px; border-radius: 50%;
+        background: rgba(255,255,255,0.75);
+        backdrop-filter: blur(18px) saturate(180%);
+        -webkit-backdrop-filter: blur(18px) saturate(180%);
+        border: 1px solid rgba(255,255,255,0.6);
+        box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer;
+        font-size: 18px;
+        transition: transform 120ms;
+      }
+      .minimized-btn.hidden { display: none; }
+      .minimized-btn:hover { transform: scale(1.06); }
+
+      .modal-backdrop {
+        position: absolute; inset: 0;
+        background: rgba(15, 15, 20, 0.55);
+        backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+        display: none; align-items: center; justify-content: center;
+        animation: fadeIn 180ms ease;
+      }
+      .modal-backdrop.active { display: flex; }
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes springIn {
+        0%   { opacity: 0; transform: scale(0.85) translateY(16px); }
+        60%  { opacity: 1; transform: scale(1.02) translateY(-2px); }
+        100% { opacity: 1; transform: scale(1)    translateY(0); }
+      }
+      .modal {
+        width: min(440px, 90vw);
+        background: rgba(255,255,255,0.92);
+        backdrop-filter: blur(24px) saturate(180%);
+        -webkit-backdrop-filter: blur(24px) saturate(180%);
+        border-radius: 18px;
+        padding: 22px 22px 20px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+        animation: springIn 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+        color: #1a1a1a;
+      }
+      .modal .icon {
+        width: 56px; height: 56px; border-radius: 14px;
+        background: linear-gradient(135deg, #fef3c7, #fde68a);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 28px; margin-bottom: 14px;
+      }
+      .modal h2 { font-size: 16px; margin: 0 0 6px; font-weight: 700; }
+      .modal p  { font-size: 13px; line-height: 1.5; color: #444; margin: 0 0 14px; }
+      .modal input {
+        width: 100%; padding: 10px 12px;
+        border: 1px solid rgba(0,0,0,0.14);
+        border-radius: 10px;
+        font-size: 14px;
+        background: rgba(255,255,255,0.9);
+        margin-bottom: 14px;
+        outline: none;
+        transition: border-color 120ms, box-shadow 120ms;
+      }
+      .modal input:focus {
+        border-color: #8b1a1a;
+        box-shadow: 0 0 0 3px rgba(139, 26, 26, 0.15);
+      }
+      .modal .actions { display: flex; gap: 8px; justify-content: flex-end; }
+    `;
+    root.appendChild(style);
+
+    // Panel HTML
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `
+      <div class="panel" id="panel">
+        <div class="header" id="header">
+          <div class="title">
+            <span class="status-dot idle" id="statusDot"></span>
+            <span id="statusLabel">Agent</span>
+          </div>
+          <div class="header-controls">
+            <button class="icon-btn" id="minBtn" title="Minimize">—</button>
+          </div>
+        </div>
+        <div class="body">
+          <div class="task" id="task">Waiting for task…</div>
+          <div class="progress-row">
+            <span id="iterText">0 / 0</span>
+            <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+          </div>
+          <div class="action-text" id="actionText">Idle</div>
+          <div id="stopRegion">
+            <button class="btn btn-danger" id="stopBtn" style="width:100%">Stop</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="minimized-btn hidden" id="minimized" title="Show agent panel">⚡</div>
+
+      <div class="modal-backdrop" id="modalBackdrop">
+        <div class="modal">
+          <div class="icon" id="modalIcon">👆</div>
+          <h2 id="modalTitle">Action Required</h2>
+          <p id="modalMessage">Please complete the action.</p>
+          <input type="text" id="modalInput" placeholder="Enter response (optional)…" />
+          <div class="actions">
+            <button class="btn btn-secondary" id="modalSkip">Done (no input)</button>
+            <button class="btn btn-primary" id="modalSubmit">Submit</button>
+          </div>
+        </div>
+      </div>
+    `;
+    root.appendChild(wrap);
+
+    const $ = (id) => root.getElementById(id);
+    const panel       = $('panel');
+    const header      = $('header');
+    const statusDot   = $('statusDot');
+    const statusLabel = $('statusLabel');
+    const taskEl      = $('task');
+    const iterText    = $('iterText');
+    const progressFill= $('progressFill');
+    const actionText  = $('actionText');
+    const stopRegion  = $('stopRegion');
+    const minBtn      = $('minBtn');
+    const minimized   = $('minimized');
+    const modalBackdrop = $('modalBackdrop');
+    const modalIcon     = $('modalIcon');
+    const modalTitle    = $('modalTitle');
+    const modalMessage  = $('modalMessage');
+    const modalInput    = $('modalInput');
+    const modalSkip     = $('modalSkip');
+    const modalSubmit   = $('modalSubmit');
+
+    // Minimize / restore
+    minBtn.addEventListener('click', () => {
+      panel.classList.add('hidden');
+      minimized.classList.remove('hidden');
+    });
+    minimized.addEventListener('click', () => {
+      panel.classList.remove('hidden');
+      minimized.classList.add('hidden');
+    });
+
+    // Drag
+    let dragState = null;
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.icon-btn')) return;
+      const rect = panel.getBoundingClientRect();
+      dragState = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+      panel.style.left = rect.left + 'px';
+      panel.style.top  = rect.top  + 'px';
+      header.classList.add('dragging');
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!dragState) return;
+      const x = Math.max(8, Math.min(window.innerWidth  - panel.offsetWidth  - 8, e.clientX - dragState.dx));
+      const y = Math.max(8, Math.min(window.innerHeight - panel.offsetHeight - 8, e.clientY - dragState.dy));
+      panel.style.left = x + 'px';
+      panel.style.top  = y + 'px';
+    });
+    window.addEventListener('mouseup', () => {
+      if (dragState) header.classList.remove('dragging');
+      dragState = null;
+    });
+
+    // Stop with inline confirmation
+    const renderStop = () => {
+      stopRegion.innerHTML = '';
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-danger';
+      btn.style.width = '100%';
+      btn.textContent = 'Stop';
+      btn.addEventListener('click', () => {
+        stopRegion.innerHTML = `
+          <div class="confirm-card">
+            <div class="label">Stop automation?</div>
+            <div class="btn-row">
+              <button class="btn btn-secondary" id="stopCancel" style="flex:1">Cancel</button>
+              <button class="btn btn-danger" id="stopConfirm" style="flex:1">Stop</button>
+            </div>
+          </div>
+        `;
+        root.getElementById('stopCancel').addEventListener('click', renderStop);
+        root.getElementById('stopConfirm').addEventListener('click', () => {
+          fetch(BACKEND_HTTP + '/stop', { method: 'POST' }).catch(() => {});
+          setStatus('stopped');
+          actionText.textContent = 'Stop requested…';
+          renderStop();
+        });
+      });
+      stopRegion.appendChild(btn);
+    };
+    renderStop();
+
+    // Status helpers
+    const STATUS_MAP = {
+      running:      { cls: '',            label: 'Running' },
+      initializing: { cls: '',            label: 'Starting…' },
+      complete:     { cls: 'complete',    label: 'Complete' },
+      completed:    { cls: 'complete',    label: 'Complete' },
+      intervention: { cls: 'intervention',label: 'Needs you' },
+      stopped:      { cls: 'error',       label: 'Stopped' },
+      failed:       { cls: 'error',       label: 'Failed' },
+      error:        { cls: 'error',       label: 'Error' },
+      idle:         { cls: 'idle',        label: 'Idle' },
+    };
+    const setStatus = (s) => {
+      const cfg = STATUS_MAP[s] || STATUS_MAP.idle;
+      statusDot.className = 'status-dot ' + cfg.cls;
+      statusLabel.textContent = cfg.label;
+    };
+
+    const REASON_ICONS = {
+      captcha: '🤖',
+      otp: '🔐',
+      '2fa': '🔐',
+      login: '🔑',
+      cookie_consent: '🍪',
+      manual: '👆',
+      other: '❓',
+    };
+
+    // Intervention modal
+    let currentIntervention = null;
+    const openModal = (message, reason) => {
+      currentIntervention = { message, reason };
+      modalIcon.textContent = REASON_ICONS[reason] || '👆';
+      modalTitle.textContent = reason === 'captcha' ? 'Solve CAPTCHA'
+        : reason === 'otp' || reason === '2fa' ? 'Enter verification code'
+        : reason === 'login' ? 'Please log in'
+        : reason === 'cookie_consent' ? 'Cookie consent'
+        : 'Action required';
+      modalMessage.textContent = message || 'Please complete the required action.';
+      modalInput.value = '';
+      modalBackdrop.classList.add('active');
+      setStatus('intervention');
+      setTimeout(() => modalInput.focus(), 50);
+    };
+    const closeModal = () => {
+      modalBackdrop.classList.remove('active');
+      currentIntervention = null;
+    };
+
+    const submitIntervention = (response) => {
+      fetch(BACKEND_HTTP + '/intervention/respond', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ response: response || '' }),
+      }).catch(() => {});
+      closeModal();
+    };
+
+    modalSubmit.addEventListener('click', () => submitIntervention(modalInput.value));
+    modalSkip.addEventListener('click', () => submitIntervention(''));
+    modalInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); submitIntervention(modalInput.value); }
+      if (e.key === 'Escape') { e.preventDefault(); /* don't auto-submit on escape */ }
+    });
+
+    // Catch up on state for newly loaded pages — if an intervention was already
+    // pending before this page loaded, pull its state from the backend.
+    fetch(BACKEND_HTTP + '/intervention/status')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && d.pending) openModal(d.message, d.reason); })
+      .catch(() => {});
+
+    // WebSocket — auto-reconnect
+    let ws = null;
+    let reconnectTimer = null;
+    const connect = () => {
+      try {
+        ws = new WebSocket(BACKEND_WS);
+      } catch (e) {
+        scheduleReconnect();
+        return;
+      }
+
+      ws.addEventListener('open', () => {
+        setStatus('idle');
+      });
+
+      ws.addEventListener('message', (evt) => {
+        if (evt.data === 'pong') return;
+        let msg;
+        try { msg = JSON.parse(evt.data); } catch { return; }
+        if (!msg || !msg.type) return;
+
+        switch (msg.type) {
+          case 'status': {
+            const s = msg.data && msg.data.status;
+            if (s) setStatus(s);
+            break;
+          }
+          case 'iteration': {
+            const d = msg.data || {};
+            iterText.textContent = `${d.current || 0} / ${d.max || 0}`;
+            const pct = d.max ? Math.min(100, (d.current / d.max) * 100) : 0;
+            progressFill.style.width = pct + '%';
+            break;
+          }
+          case 'action': {
+            const d = msg.data || {};
+            if (d.type === 'start' && d.message) {
+              taskEl.textContent = d.message.replace(/^Starting task:\s*/, '');
+            }
+            if (d.message) actionText.textContent = d.message;
+            setStatus('running');
+            break;
+          }
+          case 'intervention_required': {
+            const d = msg.data || {};
+            openModal(d.message, d.reason);
+            break;
+          }
+          case 'intervention_resolved': {
+            closeModal();
+            setStatus('running');
+            break;
+          }
+          case 'complete': {
+            setStatus('complete');
+            actionText.textContent = 'Task complete';
+            progressFill.style.width = '100%';
+            break;
+          }
+          case 'error': {
+            setStatus('error');
+            if (msg.data && msg.data.message) actionText.textContent = msg.data.message;
+            break;
+          }
+          case 'stop_requested': {
+            setStatus('stopped');
+            actionText.textContent = 'Stop requested…';
+            break;
+          }
+          case 'browser_stopped': {
+            setStatus('idle');
+            break;
+          }
+        }
+      });
+
+      ws.addEventListener('close', () => {
+        setStatus('idle');
+        scheduleReconnect();
+      });
+      ws.addEventListener('error', () => {
+        try { ws.close(); } catch {}
+      });
+    };
+    const scheduleReconnect = () => {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, 3000);
+    };
+    connect();
+  };
+
+  install();
+})();
+"""
+
+
 class BrowserController:
     def __init__(self, headless: bool = False, use_profile: bool = True):
         self.headless = headless
@@ -98,6 +598,14 @@ class BrowserController:
         
         self.pages = [self.page]
         self.current_tab_index = 0
+
+        # Inject the floating agent overlay into every page — current and future,
+        # all tabs. add_init_script on the context covers new pages automatically.
+        try:
+            self.context.add_init_script(script=OVERLAY_SCRIPT)
+        except Exception as overlay_err:
+            print(f"⚠️  Failed to register overlay init script: {overlay_err}")
+
         print(f"✓ Browser started {'with persistent profile' if self.use_profile else '(no profile)'}")
         
     def _check_thread_safety(self):

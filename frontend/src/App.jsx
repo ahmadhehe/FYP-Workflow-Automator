@@ -14,6 +14,7 @@ function App() {
     events,
     taskStatus,
     currentIteration,
+    interventionData,
     clearEvents,
   } = useWebSocket();
 
@@ -98,6 +99,7 @@ function App() {
                   clearEvents={clearEvents}
                   browserRunning={browserRunning}
                   initialTask={initialTask}
+                  interventionData={interventionData}
                 />
               }
             />

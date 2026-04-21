@@ -12,10 +12,16 @@ from typing import Optional
 from typing import Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Header
 
+from pydantic import BaseModel
+
 import app_state
 from agent_runner import EventEmitter, broadcast_event, _create_and_start_agent, run_agent_task
 from browser_controller import BrowserController, DEFAULT_PROFILE_DIR
 from models import TaskRequest, TaskResponse
+
+
+class InterventionResponse(BaseModel):
+    response: str = ""
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -97,6 +103,33 @@ async def stop_browser():
         return {"status": "stopped"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/intervention/respond")
+async def respond_to_intervention(body: InterventionResponse):
+    """
+    Unblock an in-flight requestUserAction call. Can be invoked by either the
+    in-browser overlay or the React dashboard — whichever the user reached first.
+    """
+    if not app_state.intervention_pending:
+        raise HTTPException(status_code=409, detail="No intervention pending.")
+    app_state.intervention_response = body.response or ""
+    app_state.intervention_pending = False
+    # threading.Event.set() is thread-safe and unblocks the Playwright thread
+    # that is waiting inside execute_tool(requestUserAction).
+    app_state.intervention_event.set()
+    await broadcast_event({"type": "intervention_resolved", "data": {}})
+    return {"status": "ok"}
+
+
+@router.get("/intervention/status")
+async def get_intervention_status():
+    """Lets newly-connected browser overlays catch up to an in-flight intervention."""
+    return {
+        "pending": app_state.intervention_pending,
+        "message": app_state.intervention_message,
+        "reason": app_state.intervention_reason,
+    }
 
 
 @router.get("/status")
