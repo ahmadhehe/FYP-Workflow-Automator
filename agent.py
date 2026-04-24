@@ -518,8 +518,8 @@ class BrowserAgent:
         
         tools = self.llm.get_tools_definition()
         
-        # Loop detection: track recent tool calls
-        recent_tools = []
+        # Loop detection: track recent tool call fingerprints (tool + key arg)
+        recent_fps: list = []
         
         for iteration in range(self.max_iterations):
             print(f"\n--- Iteration {iteration + 1}/{self.max_iterations} ---")
@@ -580,26 +580,48 @@ class BrowserAgent:
                     except json.JSONDecodeError:
                         arguments = {}
                     
-                    # Loop detection: check if calling same tool repeatedly
-                    recent_tools.append(function_name)
-                    if len(recent_tools) > 5:
-                        recent_tools.pop(0)
-                    
-                    # If same tool called 3+ times in a row, inject a hint
-                    if len(recent_tools) >= 3 and len(set(recent_tools[-3:])) == 1:
-                        repeated_tool = recent_tools[-1]
-                        print(f"    ⚠️  Loop detected: {repeated_tool} called 3 times in a row")
-                        
-                        # Add a hint message to break the loop
-                        hint = f"LOOP DETECTED: You called {repeated_tool} multiple times without taking action. "
-                        if repeated_tool == 'getInteractiveSnapshot':
-                            hint += "STOP getting snapshots! Look at the form fields in the snapshot you already have and use inputText(nodeId, text) to fill them, or use click(nodeId) to click checkboxes/radios, or use clickByText('Next') if you see a Next button. DO NOT call getInteractiveSnapshot again!"
+                    # Loop detection: track (tool, key-arg) fingerprints
+                    def _fp(fn: str, args: dict) -> str:
+                        if fn == 'click':
+                            return f'click({args.get("nodeId", "?")})'
+                        if fn == 'inputText':
+                            return f'input({args.get("nodeId", "?")})'
+                        if fn == 'clickByText':
+                            return f'clickByText({str(args.get("text", "?"))[:20]})'
+                        return fn
+
+                    recent_fps.append(_fp(function_name, arguments))
+                    if len(recent_fps) > 8:
+                        recent_fps.pop(0)
+
+                    # Detect same call 3+ times in a row OR a repeating 2-/3-step cycle
+                    loop_hint = None
+                    n = len(recent_fps)
+                    if n >= 3 and len(set(recent_fps[-3:])) == 1:
+                        loop_hint = f'LOOP: {recent_fps[-1]} called 3+ times in a row.'
+                    elif n >= 4 and recent_fps[-2:] == recent_fps[-4:-2]:
+                        loop_hint = f'LOOP: repeating cycle {recent_fps[-2:]} detected.'
+                    elif n >= 6 and recent_fps[-3:] == recent_fps[-6:-3]:
+                        loop_hint = f'LOOP: repeating cycle {recent_fps[-3:]} detected.'
+
+                    if loop_hint:
+                        print(f'    ⚠️  {loop_hint}')
+                        if 'getInteractiveSnapshot' in loop_hint:
+                            detail = ('STOP calling getInteractiveSnapshot. '
+                                      'Use the snapshot you already have: fill fields with inputText, '
+                                      'click checkboxes with click, or advance with clickByText("Next").')
                         else:
-                            hint += "Try a DIFFERENT approach or tool."
-                        
+                            detail = ('Your current sequence of actions is not making progress — you are going in circles. '
+                                      'STOP repeating. Call getPageContent() to re-read the full page text, '
+                                      'reason about what UI pattern or workflow this page is presenting, '
+                                      'and choose a fundamentally different action. '
+                                      'If you selected items but cannot find the expected action button: '
+                                      'scroll to the TOP of the page — toolbars and bulk-action buttons are usually there. '
+                                      'If a button appears only after selecting items, look for it now. '
+                                      'If you are still stuck after one fresh read, use requestIntervention.')
                         self.conversation_history.append({
                             'role': 'user',
-                            'content': hint
+                            'content': f'{loop_hint} {detail}',
                         })
                     
                     # Execute tool

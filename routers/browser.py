@@ -198,7 +198,7 @@ async def run_task(
         logger.warning("Could not build LMS context: %s", ctx_err)
 
     emitter = EventEmitter(flow_id)
-    result, error = await run_agent_task(
+    asyncio.create_task(run_agent_task(
         instruction=enriched_instruction,
         initial_url=request.initial_url,
         provider=provider,
@@ -208,9 +208,9 @@ async def run_task(
         file_name=request.file_name,
         files=request.files,
         original_instruction=request.instruction,
-    )
+    ))
 
-    return TaskResponse(success=error is None, result=result or "", flow_id=flow_id, error=error)
+    return TaskResponse(success=True, result="", flow_id=flow_id, error=None)
 
 
 # ── Profile browser ───────────────────────────────────────────────────────────

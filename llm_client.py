@@ -24,7 +24,7 @@ class LLMClient:
             self.model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
         elif provider == "gemini":
             self.client = google_genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-            self.model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
+            self.model = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
         else:
             raise ValueError(f"Unsupported provider: {provider}")
     
@@ -40,6 +40,7 @@ class LLMClient:
 5. When you see "Next" / "Continue" / "Submit" - click it with clickByText.
 6. Multi-page forms: fill visible fields → clickByText("Next") → read the auto-attached snapshot → fill next fields → repeat.
 7. If all required fields for a page are visible in the SAME snapshot, you may emit multiple inputText calls in a single turn — the LLM supports parallel tool calls and this saves iterations.
+8. Before submitting any form, scan the snapshot for field names containing `*` (e.g. "Title *", "Due Date *") — these are required fields. Ensure every one is filled before clicking Submit.
 
 **Available Tools:**
 
@@ -106,6 +107,7 @@ class LLMClient:
 - If `page_signals.errors` is non-empty after a submit, do NOT submit again immediately. Fix the errors first.
 - If `page_signals.required_empty` lists fields, fill them before the next submit attempt.
 - If `page_signals.notices` contains a success message, the task likely completed — don't retry.
+- Element names containing ` *` (e.g. "Title *", "Due Date *") indicate visually-marked required fields — treat them exactly like required_empty entries and fill them before submitting.
 
 **WHEN A TOOL FAILS — RECOVERY PRINCIPLES:**
 - Read `error`, `hint`, `diagnosis`, and `_recovery` — they contain the reason and what to try next.
@@ -1024,17 +1026,25 @@ Be decisive. If you see a "Next" button, click it. Don't keep scrolling looking 
                 'function': {
                     'name': 'uploadFileToBrowser',
                     'description': (
-                        "Upload one of the user's attached files to a file input element on the current page. "
-                        "Use this when a website has a file upload button (<input type=\"file\"> or a \"Choose file\" / \"Browse\" button) "
-                        "and you need to attach a file the user provided. "
-                        "First call getInteractiveSnapshot to find the file input's nodeId, then call this tool."
+                        "Upload one of the user's attached files to the current page. "
+                        "Handles all upload patterns automatically — you do NOT need to know which kind applies:\n"
+                        "• Traditional file input (<input type='file'>, 'Choose File', 'Browse' button)\n"
+                        "• Custom upload button that opens a native OS file-picker dialog on click\n"
+                        "• Drag-and-drop zone (a div/container the user is meant to drop files onto)\n\n"
+                        "Steps: (1) Call getInteractiveSnapshot to find the nodeId of the upload element "
+                        "— it could be the file input, the upload button, OR the drop-zone container. "
+                        "(2) Call this tool with that nodeId and the fileName. "
+                        "The tool tries multiple strategies automatically and falls back as needed."
                     ),
                     'parameters': {
                         'type': 'object',
                         'properties': {
                             'nodeId': {
                                 'type': 'integer',
-                                'description': 'The nodeId of the file input element from getInteractiveSnapshot'
+                                'description': (
+                                    'The nodeId from getInteractiveSnapshot of the upload target — '
+                                    'can be a file input, an upload/browse button, or a drag-and-drop zone container'
+                                )
                             },
                             'fileName': {
                                 'type': 'string',

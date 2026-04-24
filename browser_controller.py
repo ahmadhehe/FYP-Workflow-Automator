@@ -4,6 +4,7 @@ Browser Controller - Handles all browser automation using Playwright
 from playwright.sync_api import sync_playwright, Page, Browser, Playwright, BrowserContext
 from typing import Dict, List, Any, Optional
 import base64
+import mimetypes
 import time
 import os
 import logging
@@ -1317,6 +1318,7 @@ class BrowserController:
                 });
 
                 // === REQUIRED EMPTY FIELDS ===
+                // Pass 1: HTML required / aria-required attributes
                 document.querySelectorAll('input[required], textarea[required], select[required], [aria-required="true"]').forEach(el => {
                     if (el.offsetParent && (el.value === '' || el.value === null)) {
                         const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
@@ -1324,6 +1326,34 @@ class BrowserController:
                                      el.name || 'Field';
                         required_empty.push(label);
                     }
+                });
+
+                // Pass 2: Labels whose text contains '*' (visual-only required markers, common on LMS/CMS/legacy apps)
+                document.querySelectorAll('label').forEach(lbl => {
+                    const text = lbl.textContent?.trim() || '';
+                    if (!text.includes('*')) return;
+                    const forId = lbl.getAttribute('for');
+                    const input = forId
+                        ? document.getElementById(forId)
+                        : lbl.querySelector('input, textarea, select');
+                    if (!input || !input.offsetParent) return;
+                    if (input.value === '' || input.value == null) {
+                        const cleanLabel = text.replace(/\\*/g, '').trim().substring(0, 60);
+                        if (cleanLabel && !required_empty.includes(cleanLabel)) required_empty.push(cleanLabel);
+                    }
+                });
+
+                // Pass 3: Dedicated asterisk-only sibling elements (e.g. <span class="reqStar">*</span>)
+                document.querySelectorAll('*').forEach(el => {
+                    const text = (el.textContent || '').trim();
+                    if (text !== '*' && text !== '* ') return;
+                    if (!el.offsetParent) return;
+                    const container = el.closest('label, .form-group, td, li, div');
+                    if (!container) return;
+                    const input = container.querySelector('input, textarea, select');
+                    if (!input || !input.offsetParent || input.value !== '') return;
+                    const labelText = (container.textContent || '').replace(/\\*/g, '').trim().substring(0, 60);
+                    if (labelText && !required_empty.includes(labelText)) required_empty.push(labelText);
                 });
 
                 // === NOTICES (Success/Status) ===
@@ -1500,71 +1530,88 @@ class BrowserController:
             selected = False
             formatted_date = date_obj.strftime("%Y-%m-%d")
             
-            # Strategy 1: Use JavaScript to directly set value on the date input
+            # Strategy 1: Use JavaScript to directly set value — tries input[type="date"] first,
+            # then falls back to nearby text inputs with MM/DD/YYYY format (common on legacy/LMS sites)
             if not selected and element['rect']:
                 try:
+                    mdy_date = f"{date_obj.month:02d}/{date_obj.day:02d}/{date_obj.year}"
                     result = self.page.evaluate(f'''() => {{
-                        // Find date input by position
-                        const inputs = document.querySelectorAll('input[type="date"]');
-                        for (const input of inputs) {{
+                        const ex = {element['rect']['x']};
+                        const ey = {element['rect']['y']};
+                        // Try native date input first
+                        for (const input of document.querySelectorAll('input[type="date"]')) {{
                             const rect = input.getBoundingClientRect();
-                            if (Math.abs(rect.x - {element['rect']['x']}) < 20 && 
-                                Math.abs(rect.y - {element['rect']['y']}) < 20) {{
+                            if (Math.abs(rect.x - ex) < 20 && Math.abs(rect.y - ey) < 20) {{
                                 input.value = "{formatted_date}";
                                 input.dispatchEvent(new Event('input', {{ bubbles: true }}));
                                 input.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                 input.dispatchEvent(new Event('blur', {{ bubbles: true }}));
-                                return {{ success: true, value: input.value }};
+                                return {{ success: true, value: input.value, format: 'iso' }};
+                            }}
+                        }}
+                        // Fall back to text input near same position (use MM/DD/YYYY)
+                        for (const sel of ['input[type="text"]', 'input:not([type])']) {{
+                            for (const input of document.querySelectorAll(sel)) {{
+                                const rect = input.getBoundingClientRect();
+                                if (Math.abs(rect.x - ex) < 20 && Math.abs(rect.y - ey) < 20) {{
+                                    input.value = "{mdy_date}";
+                                    input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                    input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                    input.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+                                    return {{ success: true, value: input.value, format: 'mdy' }};
+                                }}
                             }}
                         }}
                         return {{ success: false, error: 'Date input not found by position' }};
                     }}''')
-                    if result.get('success') and result.get('value') == formatted_date:
+                    if result.get('success') and result.get('value'):
                         selected = True
-                        print(f"    ✓ Date set via JavaScript: {formatted_date}")
+                        print(f"    ✓ Date set via JavaScript ({result.get('format')}): {result.get('value')}")
                 except Exception as e:
                     print(f"    Strategy 1 (JavaScript by position) failed: {e}")
-            
-            # Strategy 2: Click and type using Tab navigation (works for many date inputs)
+
+            # Strategy 2: Click and type using Tab navigation (works for native browser date inputs).
+            # NOTE: does NOT set selected=True here — let the verification block decide.
             if not selected and element['rect']:
                 try:
                     x = element['rect']['x'] + 20  # Click near the start of the field
                     y = element['rect']['y'] + element['rect']['height'] / 2
-                    
+
                     # Click to focus
                     self.page.mouse.click(x, y)
                     self.page.wait_for_timeout(300)
-                    
+
                     # Select all and clear
                     self.page.keyboard.press('Control+A')
                     self.page.wait_for_timeout(100)
-                    
+
                     # Type month
                     self.page.keyboard.type(str(date_obj.month).zfill(2))
                     self.page.wait_for_timeout(100)
-                    
+
                     # Tab to day (more reliable than ArrowRight)
                     self.page.keyboard.press('Tab')
                     self.page.wait_for_timeout(100)
-                    
+
                     # Type day
                     self.page.keyboard.type(str(date_obj.day).zfill(2))
                     self.page.wait_for_timeout(100)
-                    
+
                     # Tab to year
                     self.page.keyboard.press('Tab')
                     self.page.wait_for_timeout(100)
-                    
+
                     # Type year
                     self.page.keyboard.type(str(date_obj.year))
                     self.page.wait_for_timeout(200)
-                    
+
                     # Blur to confirm
                     self.page.keyboard.press('Tab')
                     self.page.wait_for_timeout(300)
-                    
-                    print(f"    ✓ Date entered via keyboard Tab: {date_obj.month:02d}/{date_obj.day:02d}/{date_obj.year}")
+
+                    # Mark as attempted — verification block will confirm
                     selected = True
+                    print(f"    ~ Date typed via keyboard Tab (pending verification): {date_obj.month:02d}/{date_obj.day:02d}/{date_obj.year}")
                 except Exception as e:
                     print(f"    Strategy 2 (keyboard Tab) failed: {e}")
             
@@ -1630,18 +1677,19 @@ class BrowserController:
                 except Exception as e:
                     print(f"    Strategy 4 (locator) failed: {e}")
             
-            # VERIFY the date was actually entered
+            # VERIFY the date was actually entered — checks native date AND text inputs near the element
             if selected:
                 try:
                     self.page.wait_for_timeout(500)
-                    # Check if the value was actually set
                     verify_result = self.page.evaluate(f'''() => {{
-                        const inputs = document.querySelectorAll('input[type="date"]');
-                        for (const input of inputs) {{
-                            const rect = input.getBoundingClientRect();
-                            if (Math.abs(rect.x - {element['rect']['x']}) < 20 && 
-                                Math.abs(rect.y - {element['rect']['y']}) < 20) {{
-                                return {{ value: input.value, hasValue: input.value.length > 0 }};
+                        const ex = {element['rect']['x']};
+                        const ey = {element['rect']['y']};
+                        for (const sel of ['input[type="date"]', 'input[type="text"]', 'input:not([type])']) {{
+                            for (const input of document.querySelectorAll(sel)) {{
+                                const rect = input.getBoundingClientRect();
+                                if (Math.abs(rect.x - ex) < 20 && Math.abs(rect.y - ey) < 20) {{
+                                    return {{ value: input.value, hasValue: input.value.length > 0 }};
+                                }}
                             }}
                         }}
                         return {{ value: '', hasValue: false }};
@@ -1663,11 +1711,14 @@ class BrowserController:
             return {'success': False, 'error': str(e)}
     
     def upload_file_to_input(self, node_id: int, file_path: str) -> Dict[str, Any]:
-        """Upload a local file to a <input type='file'> element identified by nodeId.
+        """Upload a local file using multiple strategies.
 
-        After calling this, the LLM should check the page for a confirmation button
-        (e.g. 'Upload', 'Attach', 'Done') and click it — many sites require an explicit
-        confirm step before the file is truly attached.
+        Strategy order depends on element type:
+        - Native <input type="file">: direct set_input_files → file-chooser → drag-drop
+        - Button/container/drop-zone: file-chooser → Dropzone.js API → drag-drop → direct input
+
+        The file-chooser-first order for non-input elements avoids the Dropzone.js trap where
+        set_input_files on Dropzone's hidden input returns success but the file is never queued.
         """
         try:
             if not os.path.exists(file_path):
@@ -1681,54 +1732,185 @@ class BrowserController:
             if not element:
                 return {'success': False, 'error': f'Element with nodeId {node_id} not found in snapshot'}
 
-            # Collect all file inputs on the page (including hidden ones used by custom widgets)
-            file_inputs = self.page.locator('input[type="file"]')
-            count = file_inputs.count()
-            if count == 0:
-                return {'success': False, 'error': 'No <input type="file"> elements found on this page'}
-
-            # Try to match by accessible name / label text, then fall back to first input
-            label = element.get('name', '') or element.get('label', '') or element.get('text', '')
-            target = None
-            if label:
-                for i in range(count):
-                    inp = file_inputs.nth(i)
-                    try:
-                        aria = inp.get_attribute('aria-label') or ''
-                        id_attr = inp.get_attribute('id') or ''
-                        name_attr = inp.get_attribute('name') or ''
-                        if label.lower() in (aria + id_attr + name_attr).lower():
-                            target = inp
-                            break
-                    except Exception:
-                        pass
-
-            if target is None:
-                target = file_inputs.first
-
-            # Use Playwright's expect_file_chooser to handle sites that open a file picker
-            # dialog on button click. set_input_files works for both hidden inputs and choosers.
-            target.set_input_files(file_path)
-
-            # Dispatch change + input events explicitly — some JS frameworks (React, Vue, Sakai)
-            # do not react to programmatic value changes without these events
-            try:
-                target.dispatch_event('change')
-                target.dispatch_event('input')
-            except Exception:
-                pass
-
-            # Give the UI time to process the file selection
-            self.page.wait_for_timeout(1500)
-
             file_name = os.path.basename(file_path)
+            mime_type = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
+            strategy_errors: Dict[str, str] = {}
+
+            success_msg = (
+                f'File "{file_name}" uploaded successfully. '
+                'IMPORTANT: Many sites require an additional step — look for and click an '
+                '"Upload", "Attach", "Add", "Continue", or "Done" button to confirm. '
+                'Call getInteractiveSnapshot to check what buttons are now available.'
+            )
+
+            # True only when the snapshot element IS a native file input
+            is_native_file_input = (
+                element.get('tagName', '').lower() == 'input' and
+                element.get('inputType', '').lower() == 'file'
+            )
+
+            # ── Helper: click the element (shared by multiple strategies) ─────
+            def _click_element() -> None:
+                r = element.get('rect')
+                if element.get('name') and element.get('role'):
+                    loc = self.page.get_by_role(element['role'], name=element['name'], exact=False)
+                    if loc.count() > 0:
+                        loc.first.click(timeout=3000)
+                        return
+                if r:
+                    self.page.mouse.click(r['x'] + r['width'] / 2, r['y'] + r['height'] / 2)
+                    return
+                raise Exception('No click target available')
+
+            # ── Helper: direct set_input_files ────────────────────────────────
+            def _try_direct_input() -> bool:
+                file_inputs = self.page.locator('input[type="file"]')
+                count = file_inputs.count()
+                if count == 0:
+                    return False
+                label = (element.get('name') or element.get('label') or element.get('text') or '').lower()
+                target = None
+                if label:
+                    for i in range(count):
+                        inp = file_inputs.nth(i)
+                        try:
+                            attrs = (
+                                (inp.get_attribute('aria-label') or '') +
+                                (inp.get_attribute('id') or '') +
+                                (inp.get_attribute('name') or '')
+                            ).lower()
+                            if label in attrs:
+                                target = inp
+                                break
+                        except Exception:
+                            pass
+                if target is None:
+                    target = file_inputs.first
+                target.set_input_files(file_path)
+                try:
+                    target.dispatch_event('change')
+                    target.dispatch_event('input')
+                except Exception:
+                    pass
+                return True
+
+            # ── Helper: file-chooser interception ─────────────────────────────
+            def _try_file_chooser() -> bool:
+                with self.page.expect_file_chooser(timeout=4000) as fc_info:
+                    _click_element()
+                fc_info.value.set_files(file_path)
+                return True
+
+            # ── Helper: Dropzone.js programmatic addFile ───────────────────────
+            def _try_dropzone_api(file_b64: str) -> bool:
+                r = element.get('rect', {})
+                cx = r.get('x', 0) + r.get('width', 0) / 2
+                cy = r.get('y', 0) + r.get('height', 0) / 2
+                result = self.page.evaluate("""
+                    ([b64, fileName, mimeType, cx, cy]) => {
+                        // Find a Dropzone instance attached to an ancestor of the click point
+                        const pt = document.elementFromPoint(cx, cy);
+                        if (!pt) return { found: false };
+                        let el = pt;
+                        for (let i = 0; i < 10; i++) {
+                            if (el.dropzone) {
+                                const binary = atob(b64);
+                                const bytes = new Uint8Array(binary.length);
+                                for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                                const file = new File([bytes], fileName, { type: mimeType });
+                                el.dropzone.addFile(file);
+                                return { found: true, tagName: el.tagName };
+                            }
+                            if (!el.parentElement) break;
+                            el = el.parentElement;
+                        }
+                        return { found: false };
+                    }
+                """, [file_b64, file_name, mime_type, cx, cy])
+                return bool(result and result.get('found'))
+
+            # ── Helper: drag-and-drop DataTransfer simulation ──────────────────
+            def _try_drag_drop(file_b64: str) -> bool:
+                r = element.get('rect')
+                if not r:
+                    return False
+                cx = r['x'] + r['width'] / 2
+                cy = r['y'] + r['height'] / 2
+                result = self.page.evaluate("""
+                    async ([b64, fileName, mimeType, cx, cy]) => {
+                        const binary = atob(b64);
+                        const bytes = new Uint8Array(binary.length);
+                        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                        const file = new File([bytes], fileName, { type: mimeType });
+                        const dt = new DataTransfer();
+                        dt.items.add(file);
+
+                        let target = document.elementFromPoint(cx, cy);
+                        if (!target) return { success: false };
+
+                        let dropTarget = target;
+                        for (let depth = 0; depth < 8; depth++) {
+                            const probe = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt });
+                            dropTarget.dispatchEvent(probe);
+                            if (probe.defaultPrevented) {
+                                dropTarget.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
+                                dropTarget.dispatchEvent(new DragEvent('dragover',  { bubbles: true, cancelable: true, dataTransfer: dt }));
+                                dropTarget.dispatchEvent(new DragEvent('drop',      { bubbles: true, cancelable: true, dataTransfer: dt }));
+                                return { success: true };
+                            }
+                            if (!dropTarget.parentElement) break;
+                            dropTarget = dropTarget.parentElement;
+                        }
+                        target.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
+                        target.dispatchEvent(new DragEvent('dragover',  { bubbles: true, cancelable: true, dataTransfer: dt }));
+                        target.dispatchEvent(new DragEvent('drop',      { bubbles: true, cancelable: true, dataTransfer: dt }));
+                        return { success: true };
+                    }
+                """, [file_b64, file_name, mime_type, cx, cy])
+                return bool(result and result.get('success'))
+
+            # Read file once (needed by Dropzone and drag-drop strategies)
+            with open(file_path, 'rb') as fh:
+                file_b64 = base64.b64encode(fh.read()).decode('ascii')
+
+            if is_native_file_input:
+                # ── Native <input type="file">: direct first ──────────────────
+                ordered = [
+                    ('direct_input',  _try_direct_input),
+                    ('file_chooser',  _try_file_chooser),
+                    ('drag_drop',     lambda: _try_drag_drop(file_b64)),
+                ]
+            else:
+                # ── Button / container / drop-zone: file-chooser first ────────
+                # set_input_files on Dropzone's hidden input returns "success" but
+                # doesn't queue the file — always prefer the chooser/API path.
+                ordered = [
+                    ('file_chooser',  _try_file_chooser),
+                    ('dropzone_api',  lambda: _try_dropzone_api(file_b64)),
+                    ('drag_drop',     lambda: _try_drag_drop(file_b64)),
+                    ('direct_input',  _try_direct_input),
+                ]
+
+            for strategy_name, strategy_fn in ordered:
+                try:
+                    if strategy_fn():
+                        self.page.wait_for_timeout(1500)
+                        print(f'    ✓ Upload strategy "{strategy_name}" succeeded')
+                        return {'success': True, 'message': success_msg}
+                    else:
+                        strategy_errors[strategy_name] = 'returned False / no matching element'
+                except Exception as e:
+                    strategy_errors[strategy_name] = str(e)[:120]
+                    print(f'    ⚠️  Upload strategy "{strategy_name}" failed: {e}')
+
             return {
-                'success': True,
-                'message': (
-                    f'File "{file_name}" set on the file input. '
-                    'IMPORTANT: Many sites require an additional step — look for and click an '
-                    '"Upload", "Attach", "Add", "Continue", or "Done" button to confirm the upload. '
-                    'Call getInteractiveSnapshot to check what buttons are now available.'
+                'success': False,
+                'error': 'All upload strategies failed. The file could not be attached.',
+                'strategies_tried': strategy_errors,
+                'hint': (
+                    'Try a different nodeId — pass the drop zone container, the upload button, '
+                    'or the file input element. If none work, use requestIntervention to ask '
+                    'the user to upload the file manually.'
                 ),
             }
         except Exception as e:
